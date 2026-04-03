@@ -1,1 +1,8 @@
-{}
+{
+  "crons": [
+    {
+      "path": "/api/sentiment?refresh=true",
+      "schedule": "*/10 * * * *"
+    }
+  ]
+}

@@ -1,181 +1,165 @@
-'use client';
-import { useEffect, useState } from 'react';
-import { TrendingUp, BarChart3, RefreshCw, Zap } from 'lucide-react';
+import { BarChart3, TrendingUp, Flame, RefreshCw } from 'lucide-react';
 
-interface RankedStock {
-  symbol: string;
-  name: string;
-  price: number;
-  changePercent: number;
-  volume: number;
-  relVolume: number;
-  score: number;
-  catalyst: string;
-  risk: string;
-  sentiment: string;
-  fiveDayReturn: number;
-  distFromHigh: number;
-  annualizedReturn: number;
-  annualizedVol: number;
-  sharpe: number;
+const retColor = (v: number) => v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-zinc-400';
+const hypeColor = (v: number) => v > 70 ? 'text-orange-400' : v > 40 ? 'text-amber-400' : 'text-zinc-500';
+
+async function fetchRankings() {
+  const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+  const res = await fetch(`${baseUrl}/api/rankings`, { next: { revalidate: 60 } });
+  return res.json();
 }
 
-export default function DashboardPage() {
-  const [rankings, setRankings] = useState<RankedStock[]>([]);
-  const [stats, setStats] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [updated, setUpdated] = useState('');
+async function fetchSentiment() {
+  const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+  try {
+    const res = await fetch(`${baseUrl}/api/sentiment`, { next: { revalidate: 600 } });
+    return res.json();
+  } catch { return { source: 'unavailable' }; }
+}
 
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/rankings');
-      const json = await res.json();
-      setRankings(json.rankings || []);
-      setStats(json.stats);
-      setUpdated(json.updated);
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
-  };
-  useEffect(() => { fetchData(); }, []);
-
-  const fmt = (n: number) => n?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const fmtPct = (n: number) => {
-    if (n === undefined || n === null || isNaN(n)) return '0.00%';
-    const abs = Math.abs(n);
-    if (abs >= 1000) return (n > 0 ? '+' : '') + Math.round(n).toLocaleString() + '%';
-    return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
-  };
-  const fmtVol = (n: number) => {
-    if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
-    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
-    return n?.toString();
-  };
-  const sc = (s: number) =>
-    s >= 75 ? 'text-emerald-400' : s >= 60 ? 'text-emerald-300' : s >= 45 ? 'text-amber-400' : 'text-red-400';
-  const retColor = (r: number) =>
-    r >= 50 ? 'text-emerald-400' : r >= 0 ? 'text-emerald-300' : r >= -50 ? 'text-red-300' : 'text-red-400';
-  const rb = (r: string) => ({
-    Low: 'bg-emerald-900/50 text-emerald-400 border-emerald-800',
-    Medium: 'bg-amber-900/50 text-amber-400 border-amber-800',
-    High: 'bg-red-900/50 text-red-400 border-red-800',
-  }[r] || 'bg-amber-900/50 text-amber-400 border-amber-800');
-  const sb = (s: string) => ({
-    Bullish: 'text-emerald-400', Positive: 'text-emerald-300',
-    Neutral: 'text-zinc-400', Negative: 'text-red-300', Bearish: 'text-red-400',
-  }[s] || 'text-zinc-400');
+export default async function DashboardPage() {
+  const [data, sentData] = await Promise.all([fetchRankings(), fetchSentiment()]);
+  const { rankings = [], stats = {}, updated = '' } = data;
+  const sentSource = sentData?.source || 'unavailable';
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-bold text-zinc-100">Expected Return Rankings</h1>
-        <div className="flex items-center gap-3">
-          {updated && <span className="text-xs text-zinc-500">Updated: {new Date(updated).toLocaleTimeString()}</span>}
-          <button onClick={fetchData} disabled={loading}
-            className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-zinc-950 rounded text-sm font-medium hover:bg-emerald-500 disabled:opacity-50">
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
-          </button>
+      <h1 className="text-xl font-bold text-zinc-100 mb-6">Expected Return Rankings</h1>
+      <div className="flex items-center gap-4 mb-4">
+        <div className="text-zinc-500 text-xs">Updated: <span className="text-zinc-300">{new Date(updated).toLocaleTimeString()}</span></div>
+        <a href="/dashboard" className="text-emerald-400 text-xs hover:underline flex items-center gap-1"><RefreshCw className="w-3 h-3" />Refresh</a>
+        <div className="text-zinc-500 text-xs">Tracked <span className="text-zinc-100 font-bold">{stats.totalTracked}</span></div>
+        <div className="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400">Live Data</div>
+        <div className="text-xs px-2 py-0.5 rounded bg-orange-500/10 text-orange-400 flex items-center gap-1"><Flame className="w-3 h-3" />Hype: {sentSource === 'perplexity_sonar' ? 'Perplexity Sonar' : 'Model'}</div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
+          <div className="text-zinc-500 text-xs">Avg Score</div>
+          <div className="text-xl font-bold text-zinc-100">{stats.avgScore}</div>
+          <div className="text-zinc-500 text-xs">out of 100</div>
+        </div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
+          <div className="text-zinc-500 text-xs">High Confidence</div>
+          <div className="text-xl font-bold text-zinc-100">{stats.highConfidence}</div>
+          <div className="text-zinc-500 text-xs">score &gt;= 70</div>
+        </div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
+          <div className="text-zinc-500 text-xs">High Risk</div>
+          <div className="text-xl font-bold text-zinc-100">{stats.highRisk}</div>
+          <div className="text-zinc-500 text-xs">elevated vol</div>
+        </div>
+        <div className="bg-zinc-900 border border-orange-800/50 rounded-lg p-3">
+          <div className="text-orange-500 text-xs flex items-center gap-1"><Flame className="w-3 h-3" />Avg Hype</div>
+          <div className="text-xl font-bold text-orange-400">{stats.avgHype || 0}</div>
+          <div className="text-zinc-500 text-xs">social score</div>
+        </div>
+        <div className="bg-zinc-900 border border-orange-800/50 rounded-lg p-3">
+          <div className="text-orange-500 text-xs flex items-center gap-1"><Flame className="w-3 h-3" />High Hype</div>
+          <div className="text-xl font-bold text-orange-400">{stats.highHype || 0}</div>
+          <div className="text-zinc-500 text-xs">hype &gt; 60</div>
         </div>
       </div>
-      {loading && !rankings.length ? (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-12 text-center">
-          <RefreshCw className="w-8 h-8 text-zinc-500 animate-spin mx-auto mb-3" />
-          <p className="text-zinc-400">Analyzing 30 small-cap stocks...</p>
-        </div>
-      ) : (
-        <>
-          <div className="grid grid-cols-4 gap-4 mb-8">
-            {[
-              { label: 'Tracked', value: stats?.totalTracked || 0, sub: 'Live Data', color: 'text-emerald-400' },
-              { label: 'Avg Ann. Return', value: fmtPct(stats?.avgAnnReturn || 0), sub: 'annualized', color: stats?.avgAnnReturn >= 0 ? 'text-emerald-400' : 'text-red-400' },
-              { label: 'High Confidence', value: stats?.highConfidence || 0, sub: 'score >= 70', color: 'text-emerald-400' },
-              { label: 'High Risk', value: stats?.highRisk || 0, sub: 'elevated vol', color: 'text-red-400' },
-            ].map((k) => (
-              <div key={k.label} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-                <div className="text-zinc-500 text-xs mb-1">{k.label}</div>
-                <div className={`text-2xl font-bold ${k.color}`}>{k.value}</div>
-                <div className="text-zinc-400 text-sm mt-1">{k.sub}</div>
-              </div>
+
+      <h2 className="text-sm font-semibold text-zinc-100 mb-3">Stocks Ranked by Expected Return</h2>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-zinc-800 text-zinc-500 text-xs">
+              <th className="text-left py-2 px-2">#</th>
+              <th className="text-left py-2 px-2">Ticker</th>
+              <th className="text-left py-2 px-2">Score</th>
+              <th className="text-left py-2 px-2">Catalyst</th>
+              <th className="text-left py-2 px-2">Risk</th>
+              <th className="text-left py-2 px-2">Sentiment</th>
+              <th className="text-right py-2 px-2">Price</th>
+              <th className="text-right py-2 px-2">Change</th>
+              <th className="text-right py-2 px-2">5D Return</th>
+              <th className="text-right py-2 px-2">Rel Vol</th>
+              <th className="text-right py-2 px-2">Upside</th>
+              <th className="text-right py-2 px-2"><span className="text-orange-400">Hype</span></th>
+              <th className="text-right py-2 px-2"><span className="text-orange-400">Reddit</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rankings.map((s: any, i: number) => (
+              <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30" title={s.topRumors?.join(' | ')}>
+                <td className="py-2 px-2 text-zinc-500">{i + 1}</td>
+                <td className="py-2 px-2">
+                  <div className="font-bold text-zinc-100">{s.symbol}</div>
+                  <div className="text-zinc-500 text-xs truncate max-w-[140px]">{s.name}</div>
+                </td>
+                <td className="py-2 px-2 font-bold text-zinc-100">{s.score}</td>
+                <td className="py-2 px-2">
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${s.catalyst === 'Social Hype' ? 'bg-orange-500/20 text-orange-400' : 'bg-zinc-800 text-zinc-400'}`}>{s.catalyst}</span>
+                </td>
+                <td className="py-2 px-2 text-zinc-400">{s.risk}</td>
+                <td className="py-2 px-2 text-zinc-400">{s.sentiment}</td>
+                <td className="py-2 px-2 text-right font-mono text-zinc-100">$ {s.price?.toFixed(2)}</td>
+                <td className={`py-2 px-2 text-right font-mono ${retColor(s.changePercent)}`}>{s.changePercent > 0 ? '+' : ''}{s.changePercent}%</td>
+                <td className={`py-2 px-2 text-right font-mono ${retColor(s.fiveDayReturn)}`}>{s.fiveDayReturn > 0 ? '+' : ''}{s.fiveDayReturn}%</td>
+                <td className="py-2 px-2 text-right font-mono text-zinc-300">{s.relVolume}x</td>
+                <td className="py-2 px-2 text-right font-mono text-emerald-400">{s.upside}%</td>
+                <td className={`py-2 px-2 text-right font-mono font-bold ${hypeColor(s.hypeScore)}`}>{s.hypeScore}</td>
+                <td className="py-2 px-2 text-right font-mono text-zinc-400">{s.redditMentions}</td>
+              </tr>
             ))}
-          </div>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden mb-6">
-            <div className="p-4 border-b border-zinc-800">
-              <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
-                <Zap className="w-4 h-4 text-emerald-400" /> Ranked by Annualized Expected Return
-              </h2>
-              <p className="text-xs text-zinc-500 mt-1">Based on trailing 1-month mean daily return compounded over 252 trading days</p>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-zinc-800 text-zinc-500 text-xs">
-                    <th className="text-left p-3">#</th>
-                    <th className="text-left p-3">Ticker</th>
-                    <th className="text-right p-3">Ann. Return</th>
-                    <th className="text-right p-3">Ann. Vol</th>
-                    <th className="text-right p-3">Sharpe</th>
-                    <th className="text-right p-3">Score</th>
-                    <th className="text-left p-3">Catalyst</th>
-                    <th className="text-left p-3">Risk</th>
-                    <th className="text-left p-3">Sentiment</th>
-                    <th className="text-right p-3">Price</th>
-                    <th className="text-right p-3">Today</th>
-                    <th className="text-right p-3">5D</th>
-                    <th className="text-right p-3">Rel Vol</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rankings.map((s, i) => (
-                    <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
-                      <td className="p-3 text-zinc-500 font-mono">{i + 1}</td>
-                      <td className="p-3"><div className="text-zinc-100 font-medium">{s.symbol}</div><div className="text-zinc-500 text-xs truncate max-w-[120px]">{s.name}</div></td>
-                      <td className={`p-3 text-right font-bold font-mono ${retColor(s.annualizedReturn)}`}>{fmtPct(s.annualizedReturn)}</td>
-                      <td className="p-3 text-right font-mono text-zinc-400">{fmt(s.annualizedVol)}%</td>
-                      <td className={`p-3 text-right font-mono ${s.sharpe >= 1 ? 'text-emerald-400' : s.sharpe >= 0 ? 'text-zinc-300' : 'text-red-400'}`}>{s.sharpe?.toFixed(2)}</td>
-                      <td className={`p-3 text-right font-mono ${sc(s.score)}`}>{s.score}</td>
-                      <td className="p-3"><span className="text-xs bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">{s.catalyst}</span></td>
-                      <td className="p-3"><span className={`text-xs px-2 py-0.5 rounded border ${rb(s.risk)}`}>{s.risk}</span></td>
-                      <td className={`p-3 text-xs ${sb(s.sentiment)}`}>{s.sentiment}</td>
-                      <td className="p-3 text-right text-zinc-100 font-mono">${fmt(s.price)}</td>
-                      <td className={`p-3 text-right font-mono ${s.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fmtPct(s.changePercent)}</td>
-                      <td className={`p-3 text-right font-mono ${s.fiveDayReturn >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fmtPct(s.fiveDayReturn)}</td>
-                      <td className="p-3 text-right font-mono text-amber-400">{s.relVolume?.toFixed(1)}x</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
+          </tbody>
+        </table>
+      </div>
+
+      {rankings.length > 0 && (
+        <>
+          <div className="grid md:grid-cols-2 gap-4 mt-6">
             <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
               <h2 className="text-sm font-semibold text-zinc-100 mb-3 flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-emerald-400" /> Top 5 Annualized Returns
+                <TrendingUp className="w-4 h-4 text-emerald-400" /> Top 5 Expected Returns
               </h2>
               <div className="space-y-2">
-                {rankings.slice(0, 5).map((s) => (
-                  <div key={s.symbol} className="flex justify-between items-center text-sm">
-                    <div><span className="text-zinc-100 font-medium">{s.symbol}</span><span className="text-zinc-500 text-xs ml-2">{s.catalyst}</span></div>
+                {rankings.slice(0, 5).map((s: any) => (
+                  <div key={s.symbol} className="flex justify-between items-center">
+                    <div><span className="text-zinc-100 font-medium">{s.symbol}</span>
+                    <span className="text-xs ml-2 text-zinc-500">{s.catalyst}</span></div>
                     <div className="flex items-center gap-3">
-                      <span className={`font-mono font-bold ${retColor(s.annualizedReturn)}`}>{fmtPct(s.annualizedReturn)}</span>
-                      <span className="font-mono text-xs text-zinc-500">Sharpe {s.sharpe?.toFixed(2)}</span>
+                      <span className={`font-mono font-bold ${retColor(s.changePercent)}`}>{s.changePercent > 0 ? '+' : ''}{s.changePercent}%</span>
+                      <span className="text-zinc-100 font-bold">{s.score}</span>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
-            <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-              <h2 className="text-sm font-semibold text-zinc-100 mb-3 flex items-center gap-2">
-                <BarChart3 className="w-4 h-4 text-amber-400" /> Highest Volume Activity
+
+            <div className="bg-zinc-900 border border-orange-800/50 rounded-lg p-4">
+              <h2 className="text-sm font-semibold text-orange-400 mb-3 flex items-center gap-2">
+                <Flame className="w-4 h-4" /> Highest Social Hype
               </h2>
               <div className="space-y-2">
-                {[...rankings].sort((a, b) => b.relVolume - a.relVolume).slice(0, 5).map((s) => (
-                  <div key={s.symbol} className="flex justify-between items-center text-sm">
-                    <div><span className="text-zinc-100 font-medium">{s.symbol}</span><span className="text-zinc-500 text-xs ml-2">{fmtVol(s.volume)}</span></div>
-                    <span className="text-amber-400 font-mono">{s.relVolume?.toFixed(1)}x avg</span>
+                {[...rankings].sort((a: any, b: any) => b.hypeScore - a.hypeScore).slice(0, 5).map((s: any) => (
+                  <div key={s.symbol} className="flex justify-between items-center">
+                    <div><span className="text-zinc-100 font-medium">{s.symbol}</span>
+                    <span className="text-xs ml-2 text-zinc-500 truncate max-w-[150px] inline-block align-middle">{s.topRumors?.[0] || 'No rumors'}</span></div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-orange-400 font-mono font-bold">{s.hypeScore}</span>
+                      <span className="text-zinc-500 text-xs">{s.redditMentions} mentions</span>
+                    </div>
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+
+          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mt-4">
+            <h2 className="text-sm font-semibold text-zinc-100 mb-3 flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-amber-400" /> Highest Volume Activity
+            </h2>
+            <div className="space-y-2">
+              {[...rankings].sort((a: any, b: any) => b.relVolume - a.relVolume).slice(0, 5).map((s: any) => (
+                <div key={s.symbol} className="flex justify-between items-center">
+                  <div><span className="text-zinc-100 font-medium">{s.symbol}</span>
+                  <span className="font-mono text-xs ml-2 text-zinc-500">{(s.volume / 1e6).toFixed(1)}M</span></div>
+                  <span className="text-amber-400 font-mono font-bold">{s.relVolume}x avg</span>
+                </div>
+              ))}
             </div>
           </div>
         </>

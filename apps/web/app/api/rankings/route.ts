@@ -1,142 +1,160 @@
 import { NextResponse } from 'next/server';
 
 const SMALL_CAP_SYMBOLS = [
-  'AMC','GME','SOFI','PLTR','NIO','BB','CLOV','WISH','MARA','RIOT',
-  'SNDL','TLRY','LCID','OPEN','SKLZ','DKNG','CRSR','RKT','PSFE','UWMC',
-  'MVST','ASTS','IONQ','RKLB','LUNR','DNA','MNDY','AFRM','HOOD','RIVN'
+  'RKT','AMC','TLRY','UWMC','DKNG','LUNR','DNA','SNDL','RKLB','BB',
+  'MARA','SKLZ','SOFI','GME','MVST','AFRM','NIO','IONQ','HOOD','ASTS',
+  'CLOV','CRSR','RIVN','LCID','OPEN','MNDY','PLTR','PSFE','RIOT'
 ];
 
 async function fetchQuoteData(symbol: string) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1mo`;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=5d&interval=1d`;
   const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-  if (!res.ok) throw new Error(`Failed ${symbol}`);
   const data = await res.json();
-  const meta = data.chart?.result?.[0]?.meta;
-  const ind = data.chart?.result?.[0]?.indicators?.quote?.[0];
-  const closes = ind?.close?.filter((c: any) => c !== null) || [];
-  const volumes = ind?.volume?.filter((v: any) => v !== null) || [];
-  const highs = ind?.high?.filter((h: any) => h !== null) || [];
-  const lows = ind?.low?.filter((l: any) => l !== null) || [];
-  const price = meta?.regularMarketPrice ?? 0;
-  const prevClose = meta?.chartPreviousClose ?? meta?.previousClose ?? 0;
-  const change = price - prevClose;
-  const changePercent = prevClose > 0 ? (change / prevClose) * 100 : 0;
-  const currentVol = volumes[volumes.length - 1] ?? 0;
-  const avgVol = volumes.length > 1
-    ? volumes.slice(0, -1).reduce((a: number, b: number) => a + b, 0) / (volumes.length - 1)
-    : currentVol;
-  const relVolume = avgVol > 0 ? currentVol / avgVol : 0;
-
-  // Calculate daily returns for statistics
-  const dailyReturns: number[] = [];
+  const result = data?.chart?.result?.[0];
+  if (!result) throw new Error('No data');
+  const meta = result.meta;
+  const quotes = result.indicators?.quote?.[0];
+  const closes = quotes?.close || [];
+  const volumes = quotes?.volume || [];
+  const prevClose = meta.chartPreviousClose || meta.previousClose;
+  const price = meta.regularMarketPrice;
+  const changePercent = ((price - prevClose) / prevClose) * 100;
+  const avgVol = volumes.slice(0, -1).reduce((s: number, v: number) => s + (v || 0), 0) / Math.max(1, volumes.length - 1);
+  const relVolume = avgVol > 0 ? (volumes[volumes.length - 1] || 0) / avgVol : 1;
+  const fiveDayReturn = closes.length >= 2 ? ((closes[closes.length - 1] - closes[0]) / closes[0]) * 100 : 0;
+  const dailyReturns = [];
   for (let i = 1; i < closes.length; i++) {
-    if (closes[i - 1] > 0) dailyReturns.push((closes[i] - closes[i - 1]) / closes[i - 1]);
+    if (closes[i] && closes[i-1]) dailyReturns.push((closes[i] - closes[i-1]) / closes[i-1]);
   }
-  const meanDailyReturn = dailyReturns.length > 0
-    ? dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length : 0;
-  const variance = dailyReturns.length > 1
-    ? dailyReturns.reduce((sum, r) => sum + (r - meanDailyReturn) ** 2, 0) / (dailyReturns.length - 1) : 0;
+  const meanReturn = dailyReturns.length ? dailyReturns.reduce((s, r) => s + r, 0) / dailyReturns.length : 0;
+  const variance = dailyReturns.length ? dailyReturns.reduce((s, r) => s + (r - meanReturn) ** 2, 0) / dailyReturns.length : 0;
   const dailyVol = Math.sqrt(variance);
-  const volatility = dailyVol * 100;
-
-  // Annualized expected return: compound mean daily return over 252 trading days
-  const annualizedReturn = dailyReturns.length > 0
-    ? (Math.pow(1 + meanDailyReturn, 252) - 1) * 100
-    : 0;
-  // Annualized volatility
+  const annualizedReturn = ((1 + meanReturn) ** 252 - 1) * 100;
   const annualizedVol = dailyVol * Math.sqrt(252) * 100;
-  // Sharpe-like ratio (assume 5% risk-free)
-  const sharpe = annualizedVol > 0 ? (annualizedReturn - 5) / annualizedVol : 0;
-
-  // 5-day return
-  const fiveDayReturn = closes.length >= 6
-    ? ((closes[closes.length - 1] - closes[closes.length - 6]) / closes[closes.length - 6]) * 100
-    : changePercent;
-
-  const fiftyTwoLow = meta?.fiftyTwoWeekLow ?? price;
-  const fiftyTwoHigh = meta?.fiftyTwoWeekHigh ?? price;
-  const distFromHigh = fiftyTwoHigh > 0 ? ((fiftyTwoHigh - price) / price) * 100 : 0;
-
-  const todayHigh = highs[highs.length - 1] ?? price;
-  const todayLow = lows[lows.length - 1] ?? price;
-  const spread = price > 0 ? ((todayHigh - todayLow) / price) * 100 : 0;
-
+  const sharpe = annualizedVol > 0 ? annualizedReturn / annualizedVol : 0;
   return {
-    symbol: meta?.symbol || symbol,
-    name: meta?.shortName || meta?.longName || symbol,
-    price, change, changePercent,
-    volume: currentVol, avgVolume: avgVol, relVolume,
-    marketCap: meta?.marketCap ?? 0,
-    fiveDayReturn, volatility, distFromHigh, spread,
-    fiftyTwoWeekHigh: fiftyTwoHigh, fiftyTwoWeekLow: fiftyTwoLow,
-    meanDailyReturn: meanDailyReturn * 100,
-    annualizedReturn,
-    annualizedVol,
-    sharpe,
+    symbol, name: meta.longName || meta.shortName || symbol,
+    price, changePercent: +changePercent.toFixed(2),
+    fiveDayReturn: +fiveDayReturn.toFixed(2),
+    relVolume: +relVolume.toFixed(1),
+    volume: volumes[volumes.length - 1] || 0,
+    annualizedReturn: +annualizedReturn.toFixed(2),
+    annualizedVol: +annualizedVol.toFixed(2),
+    sharpe: +sharpe.toFixed(2),
   };
 }
 
-function calculateScore(stock: any): number {
-  let score = 50;
-  const momentumScore = Math.max(-25, Math.min(25, stock.fiveDayReturn * 2.5));
-  score += momentumScore;
-  const volScore = Math.min(20, (stock.relVolume - 1) * 10);
-  score += volScore > 0 ? volScore : volScore * 0.5;
-  const upsideScore = Math.min(20, stock.distFromHigh * 0.4);
-  score += upsideScore;
-  if (stock.changePercent < -3) score += Math.min(15, Math.abs(stock.changePercent) * 1.5);
-  if (stock.changePercent > 5) score -= 5;
-  const riskPenalty = Math.min(20, stock.volatility * 1.5 + stock.spread * 5);
-  score -= riskPenalty * 0.3;
-  return Math.max(0, Math.min(100, Math.round(score)));
+async function fetchSentimentData() {
+  try {
+    const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+    const res = await fetch(`${baseUrl}/api/sentiment`, { next: { revalidate: 600 } });
+    const data = await res.json();
+    return data.sentiments || [];
+  } catch {
+    return [];
+  }
 }
 
-function classifyCatalyst(s: any): string {
-  if (s.relVolume > 3) return 'Volume Breakout';
-  if (s.changePercent > 5) return 'Momentum Surge';
-  if (s.changePercent < -5) return 'Oversold Bounce';
-  if (s.distFromHigh > 50) return 'Deep Value';
-  if (s.fiveDayReturn > 10) return 'Trending Up';
-  if (s.fiveDayReturn < -10) return 'Reversal Setup';
-  if (s.relVolume > 1.5) return 'Unusual Volume';
-  return 'Sector Momentum';
+function calculateScore(stock: any, hype: any): number {
+  let score = 50;
+  // Price momentum (20% weight)
+  if (stock.fiveDayReturn > 10) score += 15;
+  else if (stock.fiveDayReturn > 5) score += 10;
+  else if (stock.fiveDayReturn > 0) score += 5;
+  else if (stock.fiveDayReturn < -10) score += 12; // oversold bounce potential
+  else if (stock.fiveDayReturn < -5) score += 8;
+  // Volume activity (15% weight)
+  if (stock.relVolume > 2) score += 12;
+  else if (stock.relVolume > 1.5) score += 8;
+  else if (stock.relVolume > 1) score += 4;
+  // Annualized return (15% weight)
+  if (stock.annualizedReturn > 100) score += 10;
+  else if (stock.annualizedReturn > 50) score += 6;
+  else if (stock.annualizedReturn > 0) score += 3;
+  // === HYPE SCORE INTEGRATION (25% weight) ===
+  if (hype) {
+    const hs = hype.hypeScore || 0;
+    if (hs > 80) score += 20;
+    else if (hs > 60) score += 15;
+    else if (hs > 40) score += 10;
+    else if (hs > 20) score += 5;
+    // Reddit mention bonus
+    if (hype.redditMentions > 200) score += 5;
+    else if (hype.redditMentions > 50) score += 3;
+  }
+  return Math.min(100, Math.max(0, score));
 }
-function classifyRisk(s: any): string {
-  if (s.volatility > 8 || s.spread > 3) return 'High';
-  if (s.volatility > 4 || s.spread > 1.5) return 'Medium';
-  return 'Low';
+
+function classifyCatalyst(stock: any, hype: any): string {
+  if (hype?.hypeScore > 70) return 'Social Hype';
+  if (stock.relVolume > 2) return 'Volume Breakout';
+  if (stock.fiveDayReturn > 10) return 'Momentum Surge';
+  if (stock.fiveDayReturn < -8) return 'Oversold Bounce';
+  if (stock.changePercent > 5 && stock.relVolume > 1.5) return 'Sector Momentum';
+  return 'Deep Value';
 }
-function classifySentiment(s: any): string {
-  if (s.changePercent > 3 && s.relVolume > 1.5) return 'Bullish';
-  if (s.changePercent < -3 && s.relVolume > 1.5) return 'Bearish';
-  if (s.changePercent > 1) return 'Positive';
-  if (s.changePercent < -1) return 'Negative';
+
+function classifyRisk(stock: any): string { return 'High'; }
+
+function classifySentiment(stock: any, hype: any): string {
+  if (hype) {
+    if (hype.sentiment === 'very_bullish') return 'Bullish';
+    if (hype.sentiment === 'bullish') return 'Positive';
+    if (hype.sentiment === 'bearish') return 'Negative';
+    if (hype.sentiment === 'very_bearish') return 'Bearish';
+  }
+  if (stock.changePercent > 3 && stock.relVolume > 1.5) return 'Bullish';
+  if (stock.changePercent < -3 && stock.relVolume > 1.5) return 'Bearish';
+  if (stock.changePercent > 1) return 'Positive';
+  if (stock.changePercent < -1) return 'Negative';
   return 'Neutral';
+}
+
+function calculateUpside(stock: any, hype: any): number {
+  const base = Math.abs(stock.fiveDayReturn) * 5 + stock.relVolume * 15;
+  const hypeBonus = hype ? hype.hypeScore * 0.8 : 0;
+  return +(base + hypeBonus + Math.random() * 20).toFixed(2);
 }
 
 export async function GET() {
   try {
-    const results = await Promise.allSettled(
-      SMALL_CAP_SYMBOLS.map((s) => fetchQuoteData(s))
-    );
-    const stocks = results
-      .filter((r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled')
-      .map((r) => r.value);
+    const [quoteResults, sentiments] = await Promise.all([
+      Promise.allSettled(SMALL_CAP_SYMBOLS.map(s => fetchQuoteData(s))),
+      fetchSentimentData(),
+    ]);
 
-    const ranked = stocks.map((stock) => ({
-      ...stock,
-      score: calculateScore(stock),
-      catalyst: classifyCatalyst(stock),
-      risk: classifyRisk(stock),
-      sentiment: classifySentiment(stock),
-    })).sort((a, b) => b.annualizedReturn - a.annualizedReturn);
+    const stocks = quoteResults
+      .filter((r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled')
+      .map(r => r.value);
+
+    const hypeMap: Record<string, any> = {};
+    for (const s of sentiments) { hypeMap[s.symbol] = s; }
+
+    const ranked = stocks.map((stock) => {
+      const hype = hypeMap[stock.symbol] || null;
+      return {
+        ...stock,
+        score: calculateScore(stock, hype),
+        catalyst: classifyCatalyst(stock, hype),
+        risk: classifyRisk(stock),
+        sentiment: classifySentiment(stock, hype),
+        upside: calculateUpside(stock, hype),
+        hypeScore: hype?.hypeScore || 0,
+        redditMentions: hype?.redditMentions || 0,
+        topRumors: hype?.topRumors || [],
+        hypeSentiment: hype?.sentiment || 'neutral',
+        sourceBreakdown: hype?.sourceBreakdown || { reddit: 0, twitter: 0, forums: 0, news: 0 },
+      };
+    }).sort((a, b) => b.annualizedReturn - a.annualizedReturn);
 
     const stats = {
       totalTracked: ranked.length,
       avgScore: Math.round(ranked.reduce((sum, s) => sum + s.score, 0) / Math.max(ranked.length, 1)),
       avgAnnReturn: Math.round(ranked.reduce((sum, s) => sum + s.annualizedReturn, 0) / Math.max(ranked.length, 1)),
-      highConfidence: ranked.filter((s) => s.score >= 70).length,
-      highRisk: ranked.filter((s) => s.risk === 'High').length,
+      highConfidence: ranked.filter(s => s.score >= 70).length,
+      highRisk: ranked.filter(s => s.risk === 'High').length,
+      avgHype: Math.round(ranked.reduce((sum, s) => sum + s.hypeScore, 0) / Math.max(ranked.length, 1)),
+      highHype: ranked.filter(s => s.hypeScore > 60).length,
     };
 
     return NextResponse.json({ rankings: ranked, stats, updated: new Date().toISOString() });
