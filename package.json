@@ -2,13 +2,5 @@
   "name": "smallcap-intraday-intel",
   "version": "1.0.0",
   "private": true,
-  "description": "Small-cap intraday intelligence and backtesting platform",
-  "workspaces": [
-    "apps/web"
-  ],
-  "scripts": {
-    "dev": "cd apps/web && npm run dev",
-    "build": "cd apps/web && npm run build",
-    "start": "cd apps/web && npm run start"
-  }
+  "description": "Small-cap intraday intelligence and backtesting platform"
 }
