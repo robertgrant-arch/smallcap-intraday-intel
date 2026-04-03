@@ -3,3 +3,5 @@ Small-cap intraday intelligence and backtesting platform with multi-model AI res
 
 
 Deployed on Vercel.
+
+v2
