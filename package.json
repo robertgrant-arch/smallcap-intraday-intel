@@ -4,13 +4,11 @@
   "private": true,
   "description": "Small-cap intraday intelligence and backtesting platform",
   "workspaces": [
-    "apps/web",
-    "packages/*"
+    "apps/web"
   ],
   "scripts": {
     "dev": "cd apps/web && npm run dev",
     "build": "cd apps/web && npm run build",
-    "start": "cd apps/web && npm run start",
-    "api": "cd apps/api && uvicorn main:app --reload --port 8000"
+    "start": "cd apps/web && npm run start"
   }
 }
