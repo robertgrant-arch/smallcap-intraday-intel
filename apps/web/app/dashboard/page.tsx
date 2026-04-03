@@ -5,28 +5,19 @@ import { BarChart3, TrendingUp, Flame, RefreshCw } from 'lucide-react';
 const retColor = (v: number) => v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-zinc-400';
 const hypeColor = (v: number) => v > 70 ? 'text-orange-400' : v > 40 ? 'text-amber-400' : 'text-zinc-500';
 
-export default function DashboardPage() {
-  const [data, setData] = useState<any>({ rankings: [], stats: {}, updated: '' });
-  const [loading, setLoading] = useState(true);
+async function fetchRankings() {
+  const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+  const res = await fetch(`${baseUrl}/api/rankings`, { next: { revalidate: 60 } });
+  return res.json();
+}
 
-  useEffect(() => {
-    Promise.all([
-      fetch('/api/rankings').then(r => r.json()).catch(() => ({ rankings: [], stats: {}, updated: '' })),
-      fetch('/api/sentiment').then(r => r.json()).catch(() => ({ sentiments: [] }))
-    ]).then(([rankData, sentData]) => {
-      const hypeMap: Record<string, any> = {};
-      for (const s of (sentData.sentiments || [])) { hypeMap[s.symbol] = s; }
-      const merged = (rankData.rankings || []).map((stock: any) => {
-        const hype = hypeMap[stock.symbol];
-        if (!hype) return stock;
-        return { ...stock, hypeScore: hype.hypeScore || 0, redditMentions: hype.redditMentions || 0, topRumors: hype.topRumors || [], hypeSentiment: hype.sentiment || 'neutral' };
-      });
-      const avgHype = merged.length ? Math.round(merged.reduce((s: number, r: any) => s + (r.hypeScore || 0), 0) / merged.length) : 0;
-      const highHype = merged.filter((s: any) => s.hypeScore > 60).length;
-      setData({ ...rankData, rankings: merged, stats: { ...rankData.stats, avgHype, highHype }, sentSource: sentData.source || 'model' });
-      setLoading(false);
-    });
-  }, []);
+async function fetchSentiment() {
+  const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+  try {
+    const res = await fetch(`${baseUrl}/api/sentiment`, { next: { revalidate: 600 } });
+    return res.json();
+  } catch { return { source: 'unavailable' }; }
+}
 
   const { rankings = [], stats = {} as any, updated = '', sentSource = 'model' } = data;
 
