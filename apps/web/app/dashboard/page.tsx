@@ -6,7 +6,6 @@ interface RankedStock {
   symbol: string;
   name: string;
   price: number;
-  change: number;
   changePercent: number;
   volume: number;
   relVolume: number;
@@ -16,7 +15,9 @@ interface RankedStock {
   sentiment: string;
   fiveDayReturn: number;
   distFromHigh: number;
-  spread: number;
+  annualizedReturn: number;
+  annualizedVol: number;
+  sharpe: number;
 }
 
 export default function DashboardPage() {
@@ -36,11 +37,15 @@ export default function DashboardPage() {
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
-
   useEffect(() => { fetchData(); }, []);
 
-  const fmt = (n: number) =>
-    n?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmt = (n: number) => n?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtPct = (n: number) => {
+    if (n === undefined || n === null || isNaN(n)) return '0.00%';
+    const abs = Math.abs(n);
+    if (abs >= 1000) return (n > 0 ? '+' : '') + Math.round(n).toLocaleString() + '%';
+    return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
+  };
   const fmtVol = (n: number) => {
     if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
     if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
@@ -49,6 +54,8 @@ export default function DashboardPage() {
   };
   const sc = (s: number) =>
     s >= 75 ? 'text-emerald-400' : s >= 60 ? 'text-emerald-300' : s >= 45 ? 'text-amber-400' : 'text-red-400';
+  const retColor = (r: number) =>
+    r >= 50 ? 'text-emerald-400' : r >= 0 ? 'text-emerald-300' : r >= -50 ? 'text-red-300' : 'text-red-400';
   const rb = (r: string) => ({
     Low: 'bg-emerald-900/50 text-emerald-400 border-emerald-800',
     Medium: 'bg-amber-900/50 text-amber-400 border-amber-800',
@@ -81,7 +88,7 @@ export default function DashboardPage() {
           <div className="grid grid-cols-4 gap-4 mb-8">
             {[
               { label: 'Tracked', value: stats?.totalTracked || 0, sub: 'Live Data', color: 'text-emerald-400' },
-              { label: 'Avg Score', value: stats?.avgScore || 0, sub: 'out of 100', color: 'text-zinc-100' },
+              { label: 'Avg Ann. Return', value: fmtPct(stats?.avgAnnReturn || 0), sub: 'annualized', color: stats?.avgAnnReturn >= 0 ? 'text-emerald-400' : 'text-red-400' },
               { label: 'High Confidence', value: stats?.highConfidence || 0, sub: 'score >= 70', color: 'text-emerald-400' },
               { label: 'High Risk', value: stats?.highRisk || 0, sub: 'elevated vol', color: 'text-red-400' },
             ].map((k) => (
@@ -95,8 +102,9 @@ export default function DashboardPage() {
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden mb-6">
             <div className="p-4 border-b border-zinc-800">
               <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
-                <Zap className="w-4 h-4 text-emerald-400" /> Stocks Ranked by Expected Return
+                <Zap className="w-4 h-4 text-emerald-400" /> Ranked by Annualized Expected Return
               </h2>
+              <p className="text-xs text-zinc-500 mt-1">Based on trailing 1-month mean daily return compounded over 252 trading days</p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -104,15 +112,17 @@ export default function DashboardPage() {
                   <tr className="border-b border-zinc-800 text-zinc-500 text-xs">
                     <th className="text-left p-3">#</th>
                     <th className="text-left p-3">Ticker</th>
+                    <th className="text-right p-3">Ann. Return</th>
+                    <th className="text-right p-3">Ann. Vol</th>
+                    <th className="text-right p-3">Sharpe</th>
                     <th className="text-right p-3">Score</th>
                     <th className="text-left p-3">Catalyst</th>
                     <th className="text-left p-3">Risk</th>
                     <th className="text-left p-3">Sentiment</th>
                     <th className="text-right p-3">Price</th>
-                    <th className="text-right p-3">Change</th>
-                    <th className="text-right p-3">5D Return</th>
+                    <th className="text-right p-3">Today</th>
+                    <th className="text-right p-3">5D</th>
                     <th className="text-right p-3">Rel Vol</th>
-                    <th className="text-right p-3">Upside</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -120,15 +130,17 @@ export default function DashboardPage() {
                     <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
                       <td className="p-3 text-zinc-500 font-mono">{i + 1}</td>
                       <td className="p-3"><div className="text-zinc-100 font-medium">{s.symbol}</div><div className="text-zinc-500 text-xs truncate max-w-[120px]">{s.name}</div></td>
-                      <td className={`p-3 text-right font-bold font-mono ${sc(s.score)}`}>{s.score}</td>
+                      <td className={`p-3 text-right font-bold font-mono ${retColor(s.annualizedReturn)}`}>{fmtPct(s.annualizedReturn)}</td>
+                      <td className="p-3 text-right font-mono text-zinc-400">{fmt(s.annualizedVol)}%</td>
+                      <td className={`p-3 text-right font-mono ${s.sharpe >= 1 ? 'text-emerald-400' : s.sharpe >= 0 ? 'text-zinc-300' : 'text-red-400'}`}>{s.sharpe?.toFixed(2)}</td>
+                      <td className={`p-3 text-right font-mono ${sc(s.score)}`}>{s.score}</td>
                       <td className="p-3"><span className="text-xs bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">{s.catalyst}</span></td>
                       <td className="p-3"><span className={`text-xs px-2 py-0.5 rounded border ${rb(s.risk)}`}>{s.risk}</span></td>
                       <td className={`p-3 text-xs ${sb(s.sentiment)}`}>{s.sentiment}</td>
                       <td className="p-3 text-right text-zinc-100 font-mono">${fmt(s.price)}</td>
-                      <td className={`p-3 text-right font-mono ${s.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{s.changePercent >= 0 ? '+' : ''}{fmt(s.changePercent)}%</td>
-                      <td className={`p-3 text-right font-mono ${s.fiveDayReturn >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{s.fiveDayReturn >= 0 ? '+' : ''}{fmt(s.fiveDayReturn)}%</td>
+                      <td className={`p-3 text-right font-mono ${s.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fmtPct(s.changePercent)}</td>
+                      <td className={`p-3 text-right font-mono ${s.fiveDayReturn >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fmtPct(s.fiveDayReturn)}</td>
                       <td className="p-3 text-right font-mono text-amber-400">{s.relVolume?.toFixed(1)}x</td>
-                      <td className="p-3 text-right font-mono text-sky-400">{fmt(s.distFromHigh)}%</td>
                     </tr>
                   ))}
                 </tbody>
@@ -138,15 +150,15 @@ export default function DashboardPage() {
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
               <h2 className="text-sm font-semibold text-zinc-100 mb-3 flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-emerald-400" /> Top 5 Expected Returns
+                <TrendingUp className="w-4 h-4 text-emerald-400" /> Top 5 Annualized Returns
               </h2>
               <div className="space-y-2">
                 {rankings.slice(0, 5).map((s) => (
                   <div key={s.symbol} className="flex justify-between items-center text-sm">
                     <div><span className="text-zinc-100 font-medium">{s.symbol}</span><span className="text-zinc-500 text-xs ml-2">{s.catalyst}</span></div>
                     <div className="flex items-center gap-3">
-                      <span className={`font-mono ${sc(s.score)}`}>{s.score}</span>
-                      <span className={`font-mono text-xs ${s.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{s.changePercent >= 0 ? '+' : ''}{fmt(s.changePercent)}%</span>
+                      <span className={`font-mono font-bold ${retColor(s.annualizedReturn)}`}>{fmtPct(s.annualizedReturn)}</span>
+                      <span className="font-mono text-xs text-zinc-500">Sharpe {s.sharpe?.toFixed(2)}</span>
                     </div>
                   </div>
                 ))}
