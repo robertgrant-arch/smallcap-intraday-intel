@@ -19,6 +19,29 @@ async function fetchSentiment() {
   } catch { return { source: 'unavailable' }; }
 }
 
+export default function DashboardPage() {
+  const [data, setData] = useState<any>({ rankings: [], stats: {} });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    Promise.all([
+      fetch('/api/rankings').then(r => r.json()).catch(() => ({ rankings: [], stats: {} })),
+      fetch('/api/sentiment').then(r => r.json()).catch(() => ({ source: 'unavailable' })),
+    ]).then(([rankData, sentData]) => {
+      const hypeMap: Record<string, any> = {};
+      for (const s of (sentData.sentiments || [])) { hypeMap[s.symbol] = s; }
+      const merged = (rankData.rankings || []).map((stock: any) => ({
+        ...stock,
+        hypeScore: hypeMap[stock.symbol]?.hypeScore || stock.hypeScore || 0,
+        redditMentions: hypeMap[stock.symbol]?.redditMentions || stock.redditMentions || 0,
+        topRumors: hypeMap[stock.symbol]?.topRumors || stock.topRumors || [],
+      }));
+      setData({ ...rankData, rankings: merged, sentSource: sentData.source || 'model' });
+      setLoading(false);
+    });
+  }, []);
+
+
   const { rankings = [], stats = {} as any, updated = '', sentSource = 'model' } = data;
 
   if (loading) return <div className="text-zinc-500 p-8">Loading live data...</div>;
