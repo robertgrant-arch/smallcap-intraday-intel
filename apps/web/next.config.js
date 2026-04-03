@@ -2,6 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ['lucide-react'],
+  serverExternalPackages: ['yahoo-finance2'],
   experimental: {
     serverComponentsExternalPackages: ['yahoo-finance2'],
   },
