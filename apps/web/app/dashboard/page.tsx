@@ -7,18 +7,28 @@ const hypeColor = (v: number) => v > 70 ? 'text-orange-400' : v > 40 ? 'text-amb
 
 export default function DashboardPage() {
   const [data, setData] = useState<any>({ rankings: [], stats: {}, updated: '' });
-  const [sentData, setSentData] = useState<any>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
       fetch('/api/rankings').then(r => r.json()).catch(() => ({ rankings: [], stats: {}, updated: '' })),
-      fetch('/api/sentiment').then(r => r.json()).catch(() => ({ source: 'unavailable' }))
-    ]).then(([d, s]) => { setData(d); setSentData(s); setLoading(false); });
+      fetch('/api/sentiment').then(r => r.json()).catch(() => ({ sentiments: [] }))
+    ]).then(([rankData, sentData]) => {
+      const hypeMap: Record<string, any> = {};
+      for (const s of (sentData.sentiments || [])) { hypeMap[s.symbol] = s; }
+      const merged = (rankData.rankings || []).map((stock: any) => {
+        const hype = hypeMap[stock.symbol];
+        if (!hype) return stock;
+        return { ...stock, hypeScore: hype.hypeScore || 0, redditMentions: hype.redditMentions || 0, topRumors: hype.topRumors || [], hypeSentiment: hype.sentiment || 'neutral' };
+      });
+      const avgHype = merged.length ? Math.round(merged.reduce((s: number, r: any) => s + (r.hypeScore || 0), 0) / merged.length) : 0;
+      const highHype = merged.filter((s: any) => s.hypeScore > 60).length;
+      setData({ ...rankData, rankings: merged, stats: { ...rankData.stats, avgHype, highHype }, sentSource: sentData.source || 'model' });
+      setLoading(false);
+    });
   }, []);
 
-  const { rankings = [], stats = {} as any, updated = '' } = data;
-  const sentSource = sentData?.source || 'unavailable';
+  const { rankings = [], stats = {} as any, updated = '', sentSource = 'model' } = data;
 
   if (loading) return <div className="text-zinc-500 p-8">Loading live data...</div>;
 
