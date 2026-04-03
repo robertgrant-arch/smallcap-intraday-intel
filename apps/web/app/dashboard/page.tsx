@@ -1,3 +1,4 @@
+export const dynamic = 'force-dynamic';
 import { BarChart3, TrendingUp, Flame, RefreshCw } from 'lucide-react';
 
 const retColor = (v: number) => v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-zinc-400';
@@ -5,14 +6,14 @@ const hypeColor = (v: number) => v > 70 ? 'text-orange-400' : v > 40 ? 'text-amb
 
 async function fetchRankings() {
   const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
-  const res = await fetch(`${baseUrl}/api/rankings`, { next: { revalidate: 60 } });
+  const res = await fetch(`${baseUrl}/api/rankings`, { cache: 'no-store' });
   return res.json();
 }
 
 async function fetchSentiment() {
   const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
   try {
-    const res = await fetch(`${baseUrl}/api/sentiment`, { next: { revalidate: 600 } });
+    const res = await fetch(`${baseUrl}/api/sentiment`, { cache: 'no-store' });
     return res.json();
   } catch { return { source: 'unavailable' }; }
 }
