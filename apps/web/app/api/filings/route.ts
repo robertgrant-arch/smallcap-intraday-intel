@@ -1,9 +1,5 @@
 import { NextResponse } from 'next/server';
 
-const EDGAR_BASE = 'https://efts.sec.gov/LATEST/search-index?q=';
-const EDGAR_FULL_TEXT = 'https://efts.sec.gov/LATEST/search-index';
-const EDGAR_SUBMISSIONS = 'https://data.sec.gov/submissions/CIK';
-
 const HEADERS = {
   'User-Agent': 'SmallCapIntel/1.0 (contact@smallcapintel.com)',
   Accept: 'application/json',
@@ -14,37 +10,39 @@ export async function GET(request: Request) {
   const ticker = searchParams.get('ticker') || '';
   const formType = searchParams.get('type') || '';
 
+  if (!ticker) {
+    return NextResponse.json({ error: 'ticker parameter required' }, { status: 400 });
+  }
+
   try {
-    const url = `https://efts.sec.gov/LATEST/search-index?q=%22${encodeURIComponent(ticker)}%22&dateRange=custom&startdt=${getDateDaysAgo(30)}&enddt=${getToday()}&forms=${formType || '8-K,10-Q,10-K,4,S-1'}&hits.hits.total=true&hits.hits._source=file_date,display_names,form_type,file_description,file_num,period_of_report`;
+    const params = new URLSearchParams({
+      q: `"${ticker}"`,
+      dateRange: 'custom',
+      startdt: getDateDaysAgo(90),
+      enddt: getToday(),
+    });
+    if (formType) params.set('forms', formType);
+    else params.set('forms', '8-K,10-Q,10-K,4,S-1');
 
     const res = await fetch(
-      `https://efts.sec.gov/LATEST/search-index?q=%22${encodeURIComponent(ticker)}%22&forms=${formType || '8-K,10-Q,10-K,4'}&dateRange=custom&startdt=${getDateDaysAgo(30)}&enddt=${getToday()}`,
-      { headers: HEADERS }
+      `https://efts.sec.gov/LATEST/search-index?${params.toString()}`,
+      { headers: HEADERS, next: { revalidate: 300 } }
     );
 
     if (!res.ok) {
-      const fullTextRes = await fetch(
-        `https://efts.sec.gov/LATEST/search-index?q=${encodeURIComponent(ticker)}&forms=${formType || '8-K,10-Q,10-K,4'}`,
+      const params2 = new URLSearchParams({ q: ticker });
+      const res2 = await fetch(
+        `https://efts.sec.gov/LATEST/search-index?${params2.toString()}`,
         { headers: HEADERS }
       );
-      if (!fullTextRes.ok) throw new Error('SEC EDGAR API error');
-      const data = await fullTextRes.json();
+      const data = await res2.json();
       return NextResponse.json(data);
     }
 
     const data = await res.json();
     return NextResponse.json(data);
   } catch (error: any) {
-    try {
-      const fallback = await fetch(
-        `https://efts.sec.gov/LATEST/search-index?q=${encodeURIComponent(ticker)}`,
-        { headers: HEADERS }
-      );
-      const data = await fallback.json();
-      return NextResponse.json(data);
-    } catch {
-      return NextResponse.json({ error: error.message, filings: [] }, { status: 500 });
-    }
+    return NextResponse.json({ error: error.message, hits: { hits: [], total: { value: 0 } } }, { status: 500 });
   }
 }
 
