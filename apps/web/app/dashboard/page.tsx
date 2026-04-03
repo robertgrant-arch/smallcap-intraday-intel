@@ -1,62 +1,122 @@
-const kpis = [
-  { label: 'Active Signals', value: '12', change: '+3', positive: true },
-  { label: 'Avg Confidence', value: '72', change: '+5', positive: true },
-  { label: 'Manipulation Alerts', value: '4', change: '+2', positive: false },
-  { label: 'Edge Decay (ms)', value: '340', change: '-60', positive: true },
-];
+'use client';
+import { useEffect, useState } from 'react';
+import { ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown, BarChart3, RefreshCw } from 'lucide-react';
 
-const watchlist = [
-  { ticker: 'ABCD', score: 84, catalyst: 'FDA Filing', risk: 'Low', sentiment: 'Bullish', spread: '0.8%', volume: '2.1M' },
-  { ticker: 'EFGH', score: 71, catalyst: 'Earnings Beat', risk: 'Medium', sentiment: 'Mixed', spread: '1.2%', volume: '890K' },
-  { ticker: 'IJKL', score: 65, catalyst: 'Partnership', risk: 'Low', sentiment: 'Bullish', spread: '0.5%', volume: '3.4M' },
-  { ticker: 'MNOP', score: 42, catalyst: 'Social Spike', risk: 'High', sentiment: 'Promotional', spread: '3.1%', volume: '450K' },
-  { ticker: 'QRST', score: 58, catalyst: 'Sector Sympathy', risk: 'Medium', sentiment: 'Neutral', spread: '1.8%', volume: '1.2M' },
-];
+interface Mover {
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  volume: number;
+  marketCap: number;
+  relVolume?: number;
+}
 
 export default function DashboardPage() {
+  const [data, setData] = useState<{ gainers: Mover[]; losers: Mover[]; volumeSpikes: Mover[] } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [updated, setUpdated] = useState('');
+
+  const fetchMovers = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/movers');
+      const json = await res.json();
+      setData(json);
+      setUpdated(json.updated);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchMovers(); }, []);
+
+  const fmt = (n: number) => n?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtVol = (n: number) => {
+    if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return n?.toString();
+  };
+
+  const kpis = data ? [
+    { label: 'Tracked Symbols', value: '30', change: 'Live', positive: true },
+    { label: 'Top Gainer', value: data.gainers[0]?.symbol || '-', change: `+${fmt(data.gainers[0]?.changePercent || 0)}%`, positive: true },
+    { label: 'Top Loser', value: data.losers[0]?.symbol || '-', change: `${fmt(data.losers[0]?.changePercent || 0)}%`, positive: false },
+    { label: 'Vol Spike Leader', value: data.volumeSpikes[0]?.symbol || '-', change: `${(data.volumeSpikes[0]?.relVolume || 0).toFixed(1)}x avg`, positive: true },
+  ] : [];
+
   return (
     <div>
-      <h1 className="text-xl font-bold text-zinc-100 mb-6">Dashboard</h1>
-      <div className="grid grid-cols-4 gap-4 mb-8">
-        {kpis.map((k) => (
-          <div key={k.label} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-            <div className="text-zinc-500 text-xs mb-1">{k.label}</div>
-            <div className="text-2xl font-bold text-zinc-100">{k.value}</div>
-            <div className={`text-xs mt-1 ${k.positive ? 'text-emerald-400' : 'text-red-400'}`}>{k.change}</div>
-          </div>
-        ))}
-      </div>
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-zinc-800">
-          <h2 className="text-sm font-semibold text-zinc-100">Watchlist</h2>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-xl font-bold text-zinc-100">Dashboard</h1>
+        <div className="flex items-center gap-3">
+          {updated && <span className="text-xs text-zinc-500">Updated: {new Date(updated).toLocaleTimeString()}</span>}
+          <button onClick={fetchMovers} disabled={loading} className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-zinc-950 rounded text-sm font-medium hover:bg-emerald-500 transition disabled:opacity-50">
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </button>
         </div>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-zinc-500 text-xs border-b border-zinc-800">
-              <th className="text-left px-4 py-2">Ticker</th>
-              <th className="text-left px-4 py-2">Score</th>
-              <th className="text-left px-4 py-2">Catalyst</th>
-              <th className="text-left px-4 py-2">Risk</th>
-              <th className="text-left px-4 py-2">Sentiment</th>
-              <th className="text-left px-4 py-2">Spread</th>
-              <th className="text-left px-4 py-2">Volume</th>
-            </tr>
-          </thead>
-          <tbody>
-            {watchlist.map((w) => (
-              <tr key={w.ticker} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
-                <td className="px-4 py-3 font-medium text-zinc-100">{w.ticker}</td>
-                <td className="px-4 py-3 text-zinc-400">{w.score}</td>
-                <td className="px-4 py-3 text-zinc-400">{w.catalyst}</td>
-                <td className="px-4 py-3 text-zinc-400">{w.risk}</td>
-                <td className="px-4 py-3 text-zinc-400">{w.sentiment}</td>
-                <td className="px-4 py-3 text-zinc-400">{w.spread}</td>
-                <td className="px-4 py-3 text-zinc-400">{w.volume}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
+
+      {loading && !data ? (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-12 text-center">
+          <RefreshCw className="w-8 h-8 text-zinc-500 animate-spin mx-auto mb-3" />
+          <p className="text-zinc-400">Loading market data...</p>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-4 gap-4 mb-8">
+            {kpis.map((k) => (
+              <div key={k.label} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+                <div className="text-zinc-500 text-xs mb-1">{k.label}</div>
+                <div className="text-zinc-100 text-2xl font-bold">{k.value}</div>
+                <div className={`text-sm mt-1 ${k.positive ? 'text-emerald-400' : 'text-red-400'}`}>{k.change}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-3 gap-4">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+              <h2 className="text-sm font-semibold text-zinc-100 mb-3 flex items-center gap-2"><TrendingUp className="w-4 h-4 text-emerald-400" /> Top Gainers</h2>
+              <div className="space-y-2">
+                {data?.gainers.slice(0, 8).map((m) => (
+                  <div key={m.symbol} className="flex justify-between items-center text-sm">
+                    <div><span className="text-zinc-100 font-medium">{m.symbol}</span> <span className="text-zinc-500 text-xs">${fmt(m.price)}</span></div>
+                    <span className="text-emerald-400 font-mono">+{fmt(m.changePercent)}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+              <h2 className="text-sm font-semibold text-zinc-100 mb-3 flex items-center gap-2"><TrendingDown className="w-4 h-4 text-red-400" /> Top Losers</h2>
+              <div className="space-y-2">
+                {data?.losers.slice(0, 8).map((m) => (
+                  <div key={m.symbol} className="flex justify-between items-center text-sm">
+                    <div><span className="text-zinc-100 font-medium">{m.symbol}</span> <span className="text-zinc-500 text-xs">${fmt(m.price)}</span></div>
+                    <span className="text-red-400 font-mono">{fmt(m.changePercent)}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+              <h2 className="text-sm font-semibold text-zinc-100 mb-3 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-amber-400" /> Volume Spikes</h2>
+              <div className="space-y-2">
+                {data?.volumeSpikes.slice(0, 8).map((m) => (
+                  <div key={m.symbol} className="flex justify-between items-center text-sm">
+                    <div><span className="text-zinc-100 font-medium">{m.symbol}</span> <span className="text-zinc-500 text-xs">{fmtVol(m.volume)}</span></div>
+                    <span className="text-amber-400 font-mono">{(m.relVolume || 0).toFixed(1)}x</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
