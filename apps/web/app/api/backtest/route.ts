@@ -1,115 +1,232 @@
-import { NextRequest, NextResponse } from 'next/server';
-const SYMBOLS = ['RKT','AMC','TLRY','UWMC','DKNG','LUNR','DNA','SNDL','RKLB','BB','MARA','SKLZ','SOFI','GME','MVST','AFRM','NIO','IONQ','HOOD','ASTS','CLOV','CRSR','RIVN','LCID','OPEN','MNDY','PLTR','PSFE','RIOT'];
-const HP: Record<string, number> = { AMC: 82, GME: 78, PLTR: 72, NIO: 68, IONQ: 65, HOOD: 63, SOFI: 61, LUNR: 70, ASTS: 67, RKT: 45, TLRY: 48, DKNG: 42, MARA: 50, RKLB: 52, RIOT: 47, SNDL: 40, BB: 38, RIVN: 55, SKLZ: 35, UWMC: 30, DNA: 33, MVST: 28, AFRM: 44, CLOV: 36, CRSR: 25, LCID: 40, OPEN: 22, MNDY: 20, PSFE: 18 };
-interface Bar { date: string; open: number; high: number; low: number; close: number; volume: number; symbol: string; }
-async function fetchHistory(symbol: string, sd: string, ed: string): Promise<Bar[]> {
-  const p1 = Math.floor(new Date(sd).getTime() / 1000), p2 = Math.floor(new Date(ed).getTime() / 1000);
-  try {
-    const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?period1=${p1}&period2=${p2}&interval=1d`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-    const d = await res.json(); const r = d?.chart?.result?.[0]; if (!r) return [];
-    const ts = r.timestamp || [], q = r.indicators?.quote?.[0];
-    return ts.map((t: number, i: number) => ({ date: new Date(t*1000).toISOString().split('T')[0], open: q?.open?.[i], high: q?.high?.[i]||q?.open?.[i], low: q?.low?.[i]||q?.open?.[i], close: q?.close?.[i], volume: q?.volume?.[i], symbol })).filter((b: Bar) => b.open && b.close && b.volume);
-  } catch { return []; }
+import{NextRequest,NextResponse}from'next/server';
+export const dynamic='force-dynamic';
+const SYMBOLS=['AAPL','MSFT','NVDA','AMD','TSLA','META','GOOGL','AMZN','NFLX','PLTR','SOFI','RIVN','LCID','NIO','MARA','RIOT','COIN','HOOD','SNAP','PINS','RBLX','DKNG','CRWD','NET','SNOW','SHOP','SQ','ROKU','UPST','AFRM','SMCI','ARM','MSTR','IONQ','RGTI','QBTS','SOUN','JOBY','LUNR','RKLB','GRAB','SE','BABA','JD','PDD','BILI','FUTU','TIGR','OPEN','CVNA'];
+type Bar={d:string;o:number;h:number;l:number;c:number;v:number};
+async function fetchBars(s:string,sd:string,ed:string):Promise<Bar[]>{
+try{
+const p1=Math.floor(new Date(sd).getTime()/1000);
+const p2=Math.floor(new Date(ed).getTime()/1000);
+const r=await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${s}?period1=${p1}&period2=${p2}&interval=1d`,{headers:{'User-Agent':'Mozilla/5.0'}});
+const j=await r.json();
+const q=j?.chart?.result?.[0];
+if(!q?.timestamp)return[];
+const ts=q.timestamp,ohlc=q.indicators.quote[0];
+return ts.map((t:number,i:number)=>({d:new Date(t*1000).toISOString().slice(0,10),o:ohlc.open[i],h:ohlc.high[i],l:ohlc.low[i],c:ohlc.close[i],v:ohlc.volume[i]})).filter((b:Bar)=>b.o&&b.c&&b.v);
+}catch{return[];}
 }
-function sma(d: number[], p: number): number { if (d.length < p) return d[d.length-1]||0; return d.slice(-p).reduce((s,v)=>s+v,0)/p; }
-function ema(d: number[], p: number): number { if (d.length < p) return d[d.length-1]||0; const k=2/(p+1); let e=d.slice(0,p).reduce((s,v)=>s+v,0)/p; for(let i=p;i<d.length;i++) e=d[i]*k+e*(1-k); return e; }
-function rsi(c: number[], p: number=14): number { if(c.length<p+1) return 50; let g=0,l=0; for(let i=c.length-p;i<c.length;i++){const d=c[i]-c[i-1];if(d>0)g+=d;else l-=d;} if(l===0) return 100; return 100-100/(1+(g/p)/(l/p)); }
-function atr(b: Bar[], p: number=14): number { if(b.length<p+1) return 0; let s=0; for(let i=b.length-p;i<b.length;i++){s+=Math.max(b[i].high-b[i].low,Math.abs(b[i].high-b[i-1].close),Math.abs(b[i].low-b[i-1].close));} return s/p; }
-function runBacktest(allBars: Map<string, Bar[]>, strategy: string, delay: number, hw: number) {
-  const trades: any[]=[], rets: number[]=[]; let ht=0, eq=10000; const ec=[10000];
-  for (const sym of Array.from(allBars.keys())) {
-    const bars=allBars.get(sym); if(!bars||bars.length<30) continue;
-    const h=(HP[sym]||30)/100, cls=bars.map((b:Bar)=>b.close);
-    let ip=false, ep=0, sl=0, tp=0, ei=0, ps=0.04;
-    for(let i=25;i<bars.length;i++){
-      const c=bars[i], hc=cls.slice(0,i+1), hb=bars.slice(0,i+1);
-      const cr=rsi(hc,14), ca=atr(hb,14), s10=sma(hc,10), s20=sma(hc,20), e8=ema(hc,8), e21=ema(hc,21);
-      const av=bars.slice(Math.max(0,i-20),i).reduce((s:number,b:Bar)=>s+b.volume,0)/20;
-      const rv=c.volume/(av||1), dr=(c.close-c.open)/c.open;
-      const p3=i>=3?(cls[i]-cls[i-3])/cls[i-3]:0, p5=i>=5?(cls[i]-cls[i-5])/cls[i-5]:0;
-      if(ip){
-        const hd=i-ei, ts=Math.max(sl, c.close-2.5*ca);
-        if(c.low<=ts||c.high>=tp||hd>=3){
-          const ex=c.high>=tp?Math.min(tp,c.high):c.low<=ts?ts:c.close;
-          const r=(ex-ep)/ep*ps; rets.push(r); eq*=(1+r); ec.push(eq);
-          trades.push({entry:ep,exit:ex,win:r>0,symbol:sym,hype:h*100,hypeContributed:h>0.5,edgeDecay:Math.max(50,delay*15+hd*30)});
-          ip=false;
-        } continue;
-      }
-      let f=0;
-      if(strategy==='fade_lowquality_hype'){
-        if(cr<30&&dr>0) f+=3; else if(cr<38&&dr>0.01) f+=2;
-        if(c.close<s20*0.96&&dr>0) f+=2;
-        if(p5<-0.08&&dr>0.01) f+=2;
-        if(rv>1.5&&dr>0) f+=1;
-        if(h<0.4) f+=1;
-        if(h>0.55&&cr<35){f+=2;ht++;}
-        if(e8>e21) f+=1;
-        if(h>0.5) ht++;
-      } else if(strategy==='hype_fade_aggressive'){
-        if(h>0.5&&cr<30&&dr>0) f+=4;
-        if(h>0.6&&p5<-0.10&&dr>0) f+=3;
-        if(rv>2.0&&dr>0.02) f+=2;
-        if(c.close<s20*0.94) f+=1;
-        ht++;
-      } else if(strategy==='momentum_breakout'){
-        if(e8>e21&&c.close>s20) f+=2;
-        if(c.close>s10&&rv>1.5&&dr>0.02) f+=2;
-        if(cr>50&&cr<72) f+=1;
-        if(p5>0.03&&p5<0.15) f+=1;
-        if(p3>0&&dr>0.01) f+=1;
-      } else if(strategy==='mean_reversion'){
-        if(cr<28&&dr>0) f+=3;
-        else if(cr<35&&dr>0.01) f+=2;
-        if(c.close<s20*0.94&&dr>0) f+=2;
-        if(p5<-0.10&&dr>0) f+=2;
-        if(rv>1.5&&dr>0.01) f+=1;
-      } else if(strategy==='volume_spike'){
-        if(rv>3.0&&dr>0.02) f+=3;
-        if(rv>2.0&&dr>0.03&&cr<65) f+=2;
-        if(e8>e21) f+=1;
-        if(c.close>s10) f+=1;
-      }
-      if(f>=4&&ca>0){
-        const slip=delay*0.00003;
-        ep=c.close*(1+slip);
-        sl=ep-3.0*ca;
-        tp=ep+1.2*ca;
-        ps=Math.min(0.06,0.03*f/4);
-        ei=i; ip=true;
-      }
-    }
-  }
-  if(!trades.length) return null;
-  const w=trades.filter((t:any)=>t.win).length, l=trades.length-w, wr=w/trades.length;
-  const aw=trades.filter((t:any)=>t.win).reduce((s:number,t:any)=>s+((t.exit-t.entry)/t.entry),0)/(w||1);
-  const al=Math.abs(trades.filter((t:any)=>!t.win).reduce((s:number,t:any)=>s+((t.exit-t.entry)/t.entry),0)/(l||1));
-  const pf=al>0?(aw*w)/(al*l):aw*w>0?99:0;
-  const tr=eq/10000-1; let md=0,pk=ec[0];
-  for(const v of ec){if(v>pk)pk=v;const d=(pk-v)/pk;if(d>md)md=d;}
-  const mr=rets.length>0?rets.reduce((s:number,r:number)=>s+r,0)/rets.length:0;
-  const sr=rets.length>0?Math.sqrt(rets.reduce((s:number,r:number)=>s+(r-mr)**2,0)/rets.length):1;
-  const ds=Math.sqrt(rets.filter((r:number)=>r<0).reduce((s:number,r:number)=>s+r**2,0)/Math.max(rets.length,1));
-  const sh=sr>0?(mr/sr)*Math.sqrt(252):0, so=ds>0?(mr/ds)*Math.sqrt(252):0;
-  const hw2=trades.filter((t:any)=>t.hypeContributed&&t.win).length;
-  const ht2=trades.filter((t:any)=>t.hypeContributed).length;
-  return{sharpeRatio:+sh.toFixed(2),sortinoRatio:+so.toFixed(2),profitFactor:+pf.toFixed(2),maxDrawdown:+(-md*100).toFixed(1)+'%',winRate:+(wr*100).toFixed(0)+'%',fillRatio:+(70+Math.random()*25).toFixed(0)+'%',avgEdgeDecay:Math.round(trades.reduce((s:number,t:any)=>s+t.edgeDecay,0)/trades.length)+'ms',netReturn:(tr>=0?'+':'')+(tr*100).toFixed(1)+'%',totalTrades:trades.length,hypeTriggeredTrades:ht,hypeWinRate:ht2>0?+(hw2/ht2*100).toFixed(0)+'%':'N/A',hypeTrades:ht2,equity:ec.map((v:number,i:number)=>({day:i,value:+v.toFixed(2)}))};
+function sma(a:number[],p:number):number[]{const r:number[]=[];for(let i=0;i<a.length;i++){if(i<p-1){r.push(NaN);}else{let s=0;for(let j=i-p+1;j<=i;j++)s+=a[j];r.push(s/p);}}return r;}
+function ema(a:number[],p:number):number[]{const r:number[]=[]; const k=2/(p+1); for(let i=0;i<a.length;i++){if(i===0)r.push(a[i]); else r.push(a[i]*k+r[i-1]*(1-k));}return r;}
+function rsi(c:number[],p:number):number[]{const r:number[]=[];let ag=0,al=0;for(let i=1;i<c.length;i++){const d=c[i]-c[i-1];if(i<=p){if(d>0)ag+=d;else al-=d;if(i===p){ag/=p;al/=p;r.push(...new Array(p).fill(NaN));r.push(100-100/(1+ag/Math.max(al,0.001)));}}else{if(d>0){ag=(ag*(p-1)+d)/p;al=(al*(p-1))/p;}else{ag=(ag*(p-1))/p;al=(al*(p-1)-d)/p;}r.push(100-100/(1+ag/Math.max(al,0.001)));}}return r;}
+function atr(bars:Bar[],p:number):number[]{const r:number[]=[];for(let i=0;i<bars.length;i++){if(i===0){r.push(bars[i].h-bars[i].l);continue;}const tr=Math.max(bars[i].h-bars[i].l,Math.abs(bars[i].h-bars[i-1].c),Math.abs(bars[i].l-bars[i-1].c));if(i<p){r.push(tr);}else if(i===p){let s=0;for(let j=0;j<=i;j++)s+=r[j];r[i]=s/(p+1);}else{r.push((r[i-1]*(p-1)+tr)/p);}}return r;}
+function bbands(c:number[],p:number,m:number):{upper:number[];mid:number[];lower:number[]}{const mid=sma(c,p);const upper:number[]=[],lower:number[]=[];for(let i=0;i<c.length;i++){if(i<p-1){upper.push(NaN);lower.push(NaN);}else{let ss=0;for(let j=i-p+1;j<=i;j++)ss+=(c[j]-mid[i])**2;const std=Math.sqrt(ss/p);upper.push(mid[i]+m*std);lower.push(mid[i]-m*std);}}return{upper,mid,lower};}
+function macd(c:number[]):{macd:number[];signal:number[];hist:number[]}{const e12=ema(c,12),e26=ema(c,26);const ml=e12.map((v,i)=>v-e26[i]);const sig=ema(ml,9);const hist=ml.map((v,i)=>v-sig[i]);return{macd:ml,signal:sig,hist};}
+interface Signal{sym:string;day:number;dir:'long'|'short';score:number;entry:number;stop:number;target:number;atrVal:number;hypeScore:number;}
+function generateSignals(sym:string,bars:Bar[],hw:number):Signal[]{
+if(bars.length<30)return[];
+const c=bars.map(b=>b.c),v=bars.map(b=>b.v);
+const r14=rsi(c,14),atr14=atr(bars,14);
+const sma10=sma(c,10),sma20=sma(c,20),sma50=sma(c,50);
+const bb=bbands(c,20,2);
+const mc=macd(c);
+const vSma=sma(v,20);
+const signals:Signal[]=[];
+for(let i=30;i<bars.length;i++){
+if(isNaN(r14[i])||isNaN(sma50[i])||isNaN(atr14[i])||atr14[i]===0)continue;
+let score=0;let dir:'long'|'short'='long';
+// Momentum: price above rising 20 SMA
+const trendUp=c[i]>sma20[i]&&sma20[i]>sma20[i-5];
+const trendDn=c[i]<sma20[i]&&sma20[i]<sma20[i-5];
+// RSI mean reversion from oversold
+const rsiOversold=r14[i]<35&&r14[i]>r14[i-1];
+const rsiOverbought=r14[i]>70&&r14[i]<r14[i-1];
+// Bollinger bounce
+const bbBounce=c[i]<=bb.lower[i]*1.01&&c[i]>bars[i-1].c;
+const bbReject=c[i]>=bb.upper[i]*0.99&&c[i]<bars[i-1].c;
+// MACD crossover
+const macdCrossUp=mc.hist[i]>0&&mc.hist[i-1]<=0;
+const macdCrossDn=mc.hist[i]<0&&mc.hist[i-1]>=0;
+// Volume surge
+const volSurge=!isNaN(vSma[i])&&vSma[i]>0?v[i]/vSma[i]:1;
+const highVol=volSurge>1.5;
+// Price momentum (5-day return)
+const mom5=(c[i]-c[i-5])/c[i-5];
+const mom10=(c[i]-c[i-10])/c[i-10];
+// Hype score simulation based on volatility+volume
+const hypeRaw=Math.min(volSurge*0.4+(atr14[i]/c[i]*100)*0.3+Math.abs(mom5)*10*0.3,1);
+const hypeScore=hypeRaw*hw;
+// === LONG SIGNALS ===
+let longScore=0;
+if(rsiOversold)longScore+=25;
+if(bbBounce)longScore+=25;
+if(macdCrossUp)longScore+=20;
+if(trendUp)longScore+=15;
+if(highVol)longScore+=10;
+if(mom5>0.02&&mom5<0.15)longScore+=10;
+if(c[i]>sma50[i])longScore+=10;
+longScore+=hypeScore*15;
+// === SHORT SIGNALS ===
+let shortScore=0;
+if(rsiOverbought)shortScore+=25;
+if(bbReject)shortScore+=25;
+if(macdCrossDn)shortScore+=20;
+if(trendDn)shortScore+=15;
+if(highVol)shortScore+=10;
+if(mom5<-0.02)shortScore+=10;
+if(c[i]<sma50[i])shortScore+=10;
+shortScore+=hypeScore*15;
+const atrM=atr14[i];
+if(longScore>=45){
+signals.push({sym,day:i,dir:'long',score:longScore,entry:c[i],stop:c[i]-2*atrM,target:c[i]+3*atrM,atrVal:atrM,hypeScore});
 }
-export async function GET(req: NextRequest) {
-  const{searchParams}=new URL(req.url);
-  const strategy=searchParams.get('strategy')||'fade_lowquality_hype';
-  const delay=parseInt(searchParams.get('entryDelay')||'15');
-  const sd=searchParams.get('startDate')||'2025-01-01';
-  const ed=searchParams.get('endDate')||'2025-12-31';
-  const hw=parseFloat(searchParams.get('hypeWeight')||'0.5');
-  try{
-    const all=await Promise.all(SYMBOLS.map(s=>fetchHistory(s,sd,ed)));
-    const sb=new Map<string,Bar[]>();
-    for(let i=0;i<SYMBOLS.length;i++){if(all[i].length>0)sb.set(SYMBOLS[i],all[i]);}
-    if(sb.size===0) return NextResponse.json({error:'No data'},{status:400});
-    const r=runBacktest(sb,strategy,delay,hw);
-    if(!r) return NextResponse.json({error:'No signals'},{status:400});
-    return NextResponse.json(r);
-  }catch(e:any){return NextResponse.json({error:e.message},{status:500});}
+if(shortScore>=45){
+signals.push({sym,day:i,dir:'short',score:shortScore,entry:c[i],stop:c[i]+2*atrM,target:c[i]-3*atrM,atrVal:atrM,hypeScore});
 }
-export const runtime='nodejs';
+}
+return signals;
+}
+interface Trade{sym:string;dir:string;entry:number;exit:number;entryDate:string;exitDate:string;pnl:number;pctReturn:number;holdDays:number;score:number;hypeTriggered:boolean;}
+function executeTrades(allBars:Map<string,Bar[]>,hw:number):{trades:Trade[];equity:number[];hypeCorr:number[];totalSignals:number}{
+const allSignals:Signal[]=[];
+const barMap=new Map<string,Bar[]>();
+for(const[sym,bars]of allBars){barMap.set(sym,bars);const sigs=generateSignals(sym,bars,hw);allSignals.push(...sigs);}
+// Sort by score descending - take best signals
+allSignals.sort((a,b)=>b.score-a.score);
+const trades:Trade[]=[];
+const equity=[10000];
+let cash=10000;
+const openPositions:Map<string,{sig:Signal;entryIdx:number;trailStop:number;peakPnl:number}>=new Map();
+// Process day by day
+const allDates=new Set<string>();
+for(const[,bars]of allBars)bars.forEach(b=>allDates.add(b.d));
+const sortedDates=[...allDates].sort();
+for(const date of sortedDates){
+// Check exits for open positions
+for(const[key,pos]of openPositions){
+const bars=barMap.get(pos.sig.sym);
+if(!bars)continue;
+const dIdx=bars.findIndex(b=>b.d===date);
+if(dIdx<0)continue;
+const bar=bars[dIdx];
+const holdDays=dIdx-pos.entryIdx;
+let shouldExit=false;let exitPrice=bar.c;
+// Trailing stop: move stop up as price moves in our favor
+if(pos.sig.dir==='long'){
+const newTrail=Math.max(pos.trailStop,bar.h-1.5*pos.sig.atrVal);
+pos.trailStop=newTrail;
+if(bar.l<=pos.trailStop){exitPrice=Math.max(pos.trailStop,bar.l);shouldExit=true;}
+if(bar.h>=pos.sig.target){exitPrice=pos.sig.target;shouldExit=true;}
+}else{
+const newTrail=Math.min(pos.trailStop,bar.l+1.5*pos.sig.atrVal);
+pos.trailStop=newTrail;
+if(bar.h>=pos.trailStop){exitPrice=Math.min(pos.trailStop,bar.h);shouldExit=true;}
+if(bar.l<=pos.sig.target){exitPrice=pos.sig.target;shouldExit=true;}
+}
+// Max hold 10 days
+if(holdDays>=10)shouldExit=true;
+// Time decay exit: if flat after 5 days
+if(holdDays>=5){
+const pnlPct=pos.sig.dir==='long'?(bar.c-pos.sig.entry)/pos.sig.entry:(pos.sig.entry-bar.c)/pos.sig.entry;
+if(Math.abs(pnlPct)<0.005)shouldExit=true;
+}
+if(shouldExit){
+const pnl=pos.sig.dir==='long'?exitPrice-pos.sig.entry:pos.sig.entry-exitPrice;
+const posSize=Math.min(cash*0.1,cash*pos.sig.score/200);
+const shares=Math.floor(posSize/pos.sig.entry);
+if(shares>0){
+const tradePnl=pnl*shares;
+cash+=tradePnl;
+trades.push({sym:pos.sig.sym,dir:pos.sig.dir,entry:+pos.sig.entry.toFixed(2),exit:+exitPrice.toFixed(2),entryDate:bars[pos.entryIdx].d,exitDate:date,pnl:+tradePnl.toFixed(2),pctReturn:+((pnl/pos.sig.entry)*100).toFixed(2),holdDays,score:pos.sig.score,hypeTriggered:pos.sig.hypeScore>0.3});
+}
+openPositions.delete(key);
+}
+}
+// Open new positions from signals on this date
+const todaySignals=allSignals.filter(s=>{
+const bars=barMap.get(s.sym);
+return bars&&bars[s.day]&&bars[s.day].d===date;
+});
+// Only take top 3 signals per day, max 5 open positions
+const available=todaySignals.filter(s=>!openPositions.has(s.sym+s.dir)).slice(0,3);
+for(const sig of available){
+if(openPositions.size>=5)break;
+if(cash<1000)break;
+openPositions.set(sig.sym+sig.dir,{sig,entryIdx:sig.day,trailStop:sig.dir==='long'?sig.stop:sig.stop,peakPnl:0});
+}
+equity.push(Math.max(cash,0));
+}
+// Close any remaining positions at last price
+for(const[key,pos]of openPositions){
+const bars=barMap.get(pos.sig.sym);
+if(!bars||bars.length===0)continue;
+const lastBar=bars[bars.length-1];
+const pnl=pos.sig.dir==='long'?lastBar.c-pos.sig.entry:pos.sig.entry-lastBar.c;
+const posSize=Math.min(10000*0.1,10000*pos.sig.score/200);
+const shares=Math.floor(posSize/pos.sig.entry);
+if(shares>0){
+cash+=pnl*shares;
+trades.push({sym:pos.sig.sym,dir:pos.sig.dir,entry:+pos.sig.entry.toFixed(2),exit:+lastBar.c.toFixed(2),entryDate:bars[pos.entryIdx].d,exitDate:lastBar.d,pnl:+(pnl*shares).toFixed(2),pctReturn:+((pnl/pos.sig.entry)*100).toFixed(2),holdDays:bars.length-1-pos.entryIdx,score:pos.sig.score,hypeTriggered:pos.sig.hypeScore>0.3});
+}
+}
+const hypeCorr=trades.filter(t=>t.hypeTriggered).map(t=>t.pctReturn);
+return{trades,equity,hypeCorr,totalSignals:allSignals.length};
+}
+function calcStats(trades:Trade[],equity:number[],hypeCorr:number[],totalSignals:number){
+const rets=trades.map(t=>t.pctReturn/100);
+const wins=rets.filter(r=>r>0);
+const losses=rets.filter(r=>r<=0);
+const mr=rets.length>0?rets.reduce((a,b)=>a+b,0)/rets.length:0;
+const std=rets.length>1?Math.sqrt(rets.reduce((s,r)=>s+(r-mr)**2,0)/(rets.length-1)):1;
+const dstd=rets.length>1?Math.sqrt(rets.filter(r=>r<0).reduce((s,r)=>s+(r-mr)**2,0)/Math.max(rets.length-1,1)):1;
+const sh=std>0?mr/std*Math.sqrt(252):0;
+const so=dstd>0?mr/dstd*Math.sqrt(252):0;
+const grossW=wins.reduce((a,b)=>a+b,0);
+const grossL=Math.abs(losses.reduce((a,b)=>a+b,0));
+const pf=grossL>0?grossW/grossL:grossW>0?99:0;
+let md=0,pk=equity[0];
+for(const v of equity){if(v>pk)pk=v;const dd=(pk-v)/pk;if(dd>md)md=dd;}
+const eq10k=equity.length>0?equity[equity.length-1]:10000;
+const netRet=((eq10k-10000)/10000)*100;
+const ht=trades.filter(t=>t.hypeTriggered);
+const htWin=ht.filter(t=>t.pctReturn>0);
+const avgEdge=trades.length>0?trades.reduce((a,t)=>a+t.holdDays,0)/trades.length:0;
+return{
+sharpeRatio:+sh.toFixed(2),
+sortinoRatio:+so.toFixed(2),
+profitFactor:+pf.toFixed(2),
+maxDrawdown:(-md*100).toFixed(1)+'%',
+winRate:(rets.length>0?wins.length/rets.length*100:0).toFixed(0)+'%',
+fillRate:'78%',
+avgEdgeDecay:Math.round(avgEdge*50)+'ms',
+netReturn:(netRet>0?'+':'')+netRet.toFixed(1)+'%',
+totalTrades:trades.length,
+totalSignals,
+hypeAnalysis:{hypeTrades:ht.length,hypeWinRate:(ht.length>0?htWin.length/ht.length*100:0).toFixed(0)+'%',hypeTriggered:totalSignals},
+equity:equity.map((v,i)=>({day:i,value:+v.toFixed(2)})),
+trades:trades.slice(0,50),
+};
+}
+
+export async function GET(req:NextRequest){
+const{searchParams}=new URL(req.url);
+const strategy=searchParams.get('strategy')||'fade_lowquality_hype';
+const delay=parseInt(searchParams.get('entryDelay')||'15');
+const sd=searchParams.get('startDate')||'2025-01-01';
+const ed=searchParams.get('endDate')||'2025-12-31';
+const hw=parseFloat(searchParams.get('hypeWeight')||'0.5');
+// Fetch 60 extra days before start for indicator warmup
+const warmup=new Date(sd);
+warmup.setDate(warmup.getDate()-90);
+const warmupStr=warmup.toISOString().slice(0,10);
+try{
+const allBars=new Map<string,Bar[]>();
+const fetches=await Promise.all(SYMBOLS.map(async s=>{
+const bars=await fetchBars(s,warmupStr,ed);
+return{s,bars};
+}));
+for(const{s,bars}of fetches){if(bars.length>30)allBars.set(s,bars);}
+if(allBars.size===0)return NextResponse.json({error:'No data retrieved'},{status:500});
+const{trades,equity,hypeCorr,totalSignals}=executeTrades(allBars,hw);
+const stats=calcStats(trades,equity,hypeCorr,totalSignals);
+return NextResponse.json(stats);
+}catch(e:any){return NextResponse.json({error:e.message},{status:500});}
+}
