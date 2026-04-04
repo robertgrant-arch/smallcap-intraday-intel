@@ -17,124 +17,82 @@ const trades:any[]=[];
 let equity=10000;
 const eqCurve=[equity];
 let totalSigs=0,hypeTrades=0,hypeWins=0;
-// Build date-indexed data
-const allDates=new Set<string>();
-for(const[,bars]of allBars)bars.forEach(b=>allDates.add(b.d));
-const dates=[...allDates].sort();
-// Build lookup: sym -> date -> bar index
-const idx=new Map<string,Map<string,number>>();
 for(const[sym,bars]of allBars){
-const m=new Map<string,number>();
-bars.forEach((b,i)=>m.set(b.d,i));
-idx.set(sym,m);
-}
-// Weekly rebalancing: every 5 trading days
-const holdPeriod=5;
-for(let di=50;di<dates.length-holdPeriod;di+=holdPeriod){
-const today=dates[di];
-const exitDate=dates[Math.min(di+holdPeriod,dates.length-1)];
-// Score each symbol
-const scored:any[]=[];
-for(const[sym,bars]of allBars){
-const bIdx=idx.get(sym);
-if(!bIdx)continue;
-const ti=bIdx.get(today);
-if(ti===undefined||ti<30)continue;
+if(bars.length<55)continue;
 const c=bars.map(b=>b.c),v=bars.map(b=>b.v);
-// Momentum factors
-const m5=(c[ti]-c[ti-5])/c[ti-5];
-const m10=(c[ti]-c[ti-10])/c[ti-10];
-const m20=(c[ti]-c[ti-20])/c[ti-20];
-// Trend: price vs 20 SMA
-let s20=0;for(let j=ti-19;j<=ti;j++)s20+=c[j];s20/=20;
-let s50=0;for(let j=Math.max(ti-49,0);j<=ti;j++)s50+=c[j];s50/=Math.min(50,ti+1);
-const aboveSma=c[ti]>s20&&s20>s50?1:0;
+let lastExit=-1;
+for(let i=50;i<bars.length-10;i++){
+if(i<=lastExit)continue;// don't overlap trades
+// Find 20-day high
+let hi20=0;for(let j=i-20;j<i;j++)if(c[j]>hi20)hi20=c[j];
+// Drawdown from recent high
+const dd=(hi20-c[i])/hi20;
+// 50-day SMA (long-term trend)
+let s50=0;for(let j=i-49;j<=i;j++)s50+=c[j];s50/=50;
+// 20-day SMA
+let s20=0;for(let j=i-19;j<=i;j++)s20+=c[j];s20/=20;
 // RSI
-let g=0,lo=0;for(let j=ti-13;j<=ti;j++){const d=c[j]-c[j-1];if(d>0)g+=d;else lo-=d;}g/=14;lo/=14;
+let g=0,lo=0;for(let j=i-13;j<=i;j++){const d=c[j]-c[j-1];if(d>0)g+=d;else lo-=d;}g/=14;lo/=14;
 const rsi=lo===0?100:100-100/(1+g/lo);
-// Volume surge
-let vs=0;for(let j=ti-19;j<=ti;j++)vs+=v[j];const vr=v[ti]/(vs/20);
-// ATR for volatility
-let at=0;for(let j=ti-13;j<=ti;j++){at+=Math.max(bars[j].h-bars[j].l,Math.abs(bars[j].h-bars[j-1].c),Math.abs(bars[j].l-bars[j-1].c));}at/=14;
-const vol=at/c[ti];// normalized volatility
-// Hype score
-const hypeRaw=Math.min((vr-1)*0.5+vol*30,1);
+// ATR
+let at=0;for(let j=i-13;j<=i;j++){at+=Math.max(bars[j].h-bars[j].l,Math.abs(bars[j].h-bars[j-1].c),Math.abs(bars[j].l-bars[j-1].c));}at/=14;
+// Volume
+let vs=0;for(let j=i-19;j<=i;j++)vs+=v[j];const vr=v[i]/(vs/20);
+// Hype
+const hypeRaw=Math.min((vr-1)*0.5+(at/c[i]*100)*0.3,1);
 const isHype=hypeRaw>0.3;
-// Composite momentum score (higher = stronger buy)
-// Dual momentum: absolute (m20>0) + relative ranking
+const hypeB=isHype?hw*10:0;
+// === BUY THE DIP SIGNAL ===
+// Stock has pulled back 5-25% from recent high
+// But long-term trend is still intact (price near or above 50 SMA)
+// RSI is oversold or recovering
+// Today shows green candle (buying pressure)
 let score=0;
-score+=m5*100;// short-term momentum
-score+=m10*80;// medium momentum
-score+=m20*60;// longer momentum
-if(aboveSma)score+=5;// trend alignment bonus
-if(rsi>50&&rsi<70)score+=3;// healthy momentum zone
-if(rsi<30)score-=5;// avoid falling knives
-if(vr>1.5)score+=2;// volume confirmation
-if(isHype)score+=hw*5;// hype bonus
-// Penalize extreme volatility (risk management)
-if(vol>0.05)score-=3;
-scored.push({sym,score,ti,bars,isHype,at:at,vol,entry:c[ti]});
-}
-// Rank by composite score
-scored.sort((a:any,b:any)=>b.score-a.score);
-// Buy top 5 momentum stocks, short bottom 2 (if desired)
-const topN=Math.min(5,scored.length);
-const longPicks=scored.filter((s:any)=>s.score>0).slice(0,topN);
-const shortPicks=scored.filter((s:any)=>s.score<-5).slice(-2);
-const posSize=equity*0.15/Math.max(longPicks.length,1);// 15% per position, max 75% invested
-for(const pick of longPicks){
-const{sym,ti,bars,isHype,at}=pick;
+if(dd>=0.05&&dd<=0.25)score+=30;// meaningful pullback
+if(dd>=0.10&&dd<=0.20)score+=10;// sweet spot
+if(c[i]>s50*0.92)score+=15;// still near long-term trend
+if(s20>s50*0.95)score+=10;// 20 SMA hasn't broken down much
+if(rsi<40)score+=15;// oversold
+if(rsi<30)score+=10;// deeply oversold
+if(c[i]>c[i-1])score+=10;// green candle reversal
+if(c[i]>c[i-1]&&c[i-1]<c[i-2]&&c[i-2]<c[i-3])score+=10;// V-bottom
+if(vr>1.3)score+=10;// volume on the bounce
+score+=hypeB;
+if(score<50)continue;
 totalSigs++;
-const entryBar=bars[ti+1];
-if(!entryBar)continue;
-const entry=entryBar.o;
-if(entry<=0)continue;
-// Find exit bar (holdPeriod days later)
-const exitIdx=Math.min(ti+1+holdPeriod,bars.length-1);
-let exitPrice=bars[exitIdx].c;
-// Trailing stop during hold
-let trailStop=entry-at*2;
-for(let d=ti+2;d<=exitIdx;d++){
+// Enter next day open
+const entry=bars[i+1]?.o;
+if(!entry||entry<=0)continue;
+// Hold up to 20 days with wide trailing stop
+const maxHold=Math.min(i+21,bars.length-1);
+let exitPrice=entry;
+let trailStop=entry-at*2.5;// wide initial stop
+let exitDay=maxHold;
+let peaked=entry;
+for(let d=i+2;d<=maxHold;d++){
 const b=bars[d];
-if(b.c>entry+at*1.5)trailStop=Math.max(trailStop,b.c-at*1.5);
-if(b.l<=trailStop){exitPrice=Math.max(trailStop,b.l);break;}
-exitPrice=b.c;
+if(b.h>peaked)peaked=b.h;
+// Progressive trailing: tighten as profit grows
+const profit=(peaked-entry)/entry;
+if(profit>0.15)trailStop=Math.max(trailStop,peaked-at*1);// tight after 15% gain
+else if(profit>0.08)trailStop=Math.max(trailStop,peaked-at*1.5);// medium after 8%
+else if(profit>0.03)trailStop=Math.max(trailStop,entry+at*0.3);// lock small profit
+if(b.l<=trailStop){exitPrice=Math.max(trailStop,b.l);exitDay=d;break;}
+exitPrice=b.c;exitDay=d;
 }
 const pnl=(exitPrice-entry)/entry;
-const tradePnl=posSize*pnl;
+const riskPct=Math.min(0.04,0.015+0.005*((score-50)/10));
+const tradePnl=equity*riskPct*pnl;
 equity+=tradePnl;
 eqCurve.push(+equity.toFixed(2));
+lastExit=exitDay;
 const ht=isHype;
 if(ht){hypeTrades++;if(pnl>0)hypeWins++;}
-trades.push({sym,dir:'long',entry:+entry.toFixed(2),exit:+exitPrice.toFixed(2),entryDate:entryBar.d,exitDate:bars[Math.min(exitIdx,bars.length-1)].d,pnl:+tradePnl.toFixed(2),pctReturn:+(pnl*100).toFixed(2),score:+pick.score.toFixed(1),hypeTriggered:ht});
-}
-// Short bottom picks (small allocation)
-const shortSize=equity*0.05/Math.max(shortPicks.length,1);
-for(const pick of shortPicks){
-const{sym,ti,bars,isHype,at}=pick;
-totalSigs++;
-const entryBar=bars[ti+1];
-if(!entryBar)continue;
-const entry=entryBar.o;
-if(entry<=0)continue;
-const exitIdx=Math.min(ti+1+holdPeriod,bars.length-1);
-let exitPrice=bars[exitIdx].c;
-let trailStop=entry+at*2;
-for(let d=ti+2;d<=exitIdx;d++){
-const b=bars[d];
-if(b.c<entry-at*1.5)trailStop=Math.min(trailStop,b.c+at*1.5);
-if(b.h>=trailStop){exitPrice=Math.min(trailStop,b.h);break;}
-exitPrice=b.c;
-}
-const pnl=(entry-exitPrice)/entry;
-const tradePnl=shortSize*pnl;
-equity+=tradePnl;
-eqCurve.push(+equity.toFixed(2));
-const ht=isHype;
-if(ht){hypeTrades++;if(pnl>0)hypeWins++;}
-trades.push({sym,dir:'short',entry:+entry.toFixed(2),exit:+exitPrice.toFixed(2),entryDate:entryBar.d,exitDate:bars[Math.min(exitIdx,bars.length-1)].d,pnl:+tradePnl.toFixed(2),pctReturn:+(pnl*100).toFixed(2),score:+pick.score.toFixed(1),hypeTriggered:ht});
+trades.push({sym,dir:'long',entry:+entry.toFixed(2),exit:+exitPrice.toFixed(2),entryDate:bars[i+1].d,exitDate:bars[exitDay].d,pnl:+tradePnl.toFixed(2),pctReturn:+(pnl*100).toFixed(2),score,hypeTriggered:ht});
 }
 }
+// Sort trades by date
+trades.sort((a:any,b:any)=>a.entryDate.localeCompare(b.entryDate));
 const rets=trades.map((t:any)=>t.pctReturn/100);
 const wins=rets.filter((r:number)=>r>0);
 const mr=rets.length>0?rets.reduce((a:number,b:number)=>a+b,0)/rets.length:0;
@@ -146,7 +104,7 @@ const gw=wins.reduce((a:number,b:number)=>a+b,0);
 const gl=Math.abs(rets.filter((r:number)=>r<=0).reduce((a:number,b:number)=>a+b,0));
 const pf=gl>0?gw/gl:gw>0?99:0;
 let md=0,pk=eqCurve[0];
-for(const val of eqCurve){if(val>pk)pk=val;const dd=(pk-val)/pk;if(dd>md)md=dd;}
+for(const val of eqCurve){if(val>pk)pk=val;const dd2=(pk-val)/pk;if(dd2>md)md=dd2;}
 const netRet=((equity-10000)/10000)*100;
 return{sharpeRatio:+sh.toFixed(2),sortinoRatio:+so.toFixed(2),profitFactor:+pf.toFixed(2),maxDrawdown:(-md*100).toFixed(1)+'%',winRate:(rets.length>0?(wins.length/rets.length*100):0).toFixed(0)+'%',fillRate:'78%',avgEdgeDecay:'250ms',netReturn:(netRet>0?'+':'')+netRet.toFixed(1)+'%',totalTrades:trades.length,hypeAnalysis:{hypeTrades,hypeWinRate:(hypeTrades>0?(hypeWins/hypeTrades*100):0).toFixed(0)+'%',hypeTriggered:totalSigs},equity:eqCurve.map((val:number,i:number)=>({day:i,value:val})),trades:trades.slice(0,50)};
 }
