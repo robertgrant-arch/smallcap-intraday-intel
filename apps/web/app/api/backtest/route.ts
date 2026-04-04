@@ -22,66 +22,50 @@ if(bars.length<55)continue;
 const c=bars.map(b=>b.c),v=bars.map(b=>b.v);
 let lastExit=-1;
 for(let i=50;i<bars.length-10;i++){
-if(i<=lastExit)continue;// don't overlap trades
-// Find 20-day high
+if(i<=lastExit)continue;
 let hi20=0;for(let j=i-20;j<i;j++)if(c[j]>hi20)hi20=c[j];
-// Drawdown from recent high
 const dd=(hi20-c[i])/hi20;
-// 50-day SMA (long-term trend)
 let s50=0;for(let j=i-49;j<=i;j++)s50+=c[j];s50/=50;
-// 20-day SMA
 let s20=0;for(let j=i-19;j<=i;j++)s20+=c[j];s20/=20;
-// RSI
 let g=0,lo=0;for(let j=i-13;j<=i;j++){const d=c[j]-c[j-1];if(d>0)g+=d;else lo-=d;}g/=14;lo/=14;
 const rsi=lo===0?100:100-100/(1+g/lo);
-// ATR
 let at=0;for(let j=i-13;j<=i;j++){at+=Math.max(bars[j].h-bars[j].l,Math.abs(bars[j].h-bars[j-1].c),Math.abs(bars[j].l-bars[j-1].c));}at/=14;
-// Volume
 let vs=0;for(let j=i-19;j<=i;j++)vs+=v[j];const vr=v[i]/(vs/20);
-// Hype
 const hypeRaw=Math.min((vr-1)*0.5+(at/c[i]*100)*0.3,1);
 const isHype=hypeRaw>0.3;
 const hypeB=isHype?hw*10:0;
-// === BUY THE DIP SIGNAL ===
-// Stock has pulled back 5-25% from recent high
-// But long-term trend is still intact (price near or above 50 SMA)
-// RSI is oversold or recovering
-// Today shows green candle (buying pressure)
 let score=0;
-if(dd>=0.05&&dd<=0.25)score+=30;// meaningful pullback
-if(dd>=0.10&&dd<=0.20)score+=10;// sweet spot
-if(c[i]>s50*0.92)score+=15;// still near long-term trend
-if(s20>s50*0.95)score+=10;// 20 SMA hasn't broken down much
-if(rsi<40)score+=15;// oversold
-if(rsi<30)score+=10;// deeply oversold
-if(c[i]>c[i-1])score+=10;// green candle reversal
-if(c[i]>c[i-1]&&c[i-1]<c[i-2]&&c[i-2]<c[i-3])score+=10;// V-bottom
-if(vr>1.3)score+=10;// volume on the bounce
+if(dd>=0.05&&dd<=0.25)score+=30;
+if(dd>=0.10&&dd<=0.20)score+=10;
+if(c[i]>s50*0.92)score+=15;
+if(s20>s50*0.95)score+=10;
+if(rsi<40)score+=15;
+if(rsi<30)score+=10;
+if(c[i]>c[i-1])score+=10;
+if(c[i]>c[i-1]&&c[i-1]<c[i-2]&&c[i-2]<c[i-3])score+=10;
+if(vr>1.3)score+=10;
 score+=hypeB;
 if(score<50)continue;
 totalSigs++;
-// Enter next day open
 const entry=bars[i+1]?.o;
 if(!entry||entry<=0)continue;
-// Hold up to 20 days with wide trailing stop
-const maxHold=Math.min(i+21,bars.length-1);
-let exitPrice=entry;
-let trailStop=entry-at*2.5;// wide initial stop
-let exitDay=maxHold;
-let peaked=entry;
-for(let d=i+2;d<=maxHold;d++){
-const b=bars[d];
-if(b.h>peaked)peaked=b.h;
-// Progressive trailing: tighten as profit grows
-const profit=(peaked-entry)/entry;
-if(profit>0.15)trailStop=Math.max(trailStop,peaked-at*1);// tight after 15% gain
-else if(profit>0.08)trailStop=Math.max(trailStop,peaked-at*1.5);// medium after 8%
-else if(profit>0.03)trailStop=Math.max(trailStop,entry+at*0.3);// lock small profit
-if(b.l<=trailStop){exitPrice=Math.max(trailStop,b.l);exitDay=d;break;}
-exitPrice=b.c;exitDay=d;
+// Simple fixed hold: hold exactly 10 days, hard stop at -5%
+const holdDays=10;
+const stopPct=0.05;// 5% stop loss
+const stopPrice=entry*(1-stopPct);
+const maxH=Math.min(i+1+holdDays,bars.length-1);
+let exitPrice=bars[maxH].c;
+let exitDay=maxH;
+// Check if stop hit during hold
+for(let d=i+2;d<=maxH;d++){
+if(bars[d].l<=stopPrice){
+exitPrice=stopPrice;
+exitDay=d;
+break;
+}
 }
 const pnl=(exitPrice-entry)/entry;
-const riskPct=Math.min(0.04,0.015+0.005*((score-50)/10));
+const riskPct=Math.min(0.03,0.01+0.004*((score-50)/10));
 const tradePnl=equity*riskPct*pnl;
 equity+=tradePnl;
 eqCurve.push(+equity.toFixed(2));
@@ -91,7 +75,6 @@ if(ht){hypeTrades++;if(pnl>0)hypeWins++;}
 trades.push({sym,dir:'long',entry:+entry.toFixed(2),exit:+exitPrice.toFixed(2),entryDate:bars[i+1].d,exitDate:bars[exitDay].d,pnl:+tradePnl.toFixed(2),pctReturn:+(pnl*100).toFixed(2),score,hypeTriggered:ht});
 }
 }
-// Sort trades by date
 trades.sort((a:any,b:any)=>a.entryDate.localeCompare(b.entryDate));
 const rets=trades.map((t:any)=>t.pctReturn/100);
 const wins=rets.filter((r:number)=>r>0);
