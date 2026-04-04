@@ -29,8 +29,8 @@ async function fetchHistory(symbol: string, startDate: string, endDate: string):
     return ts.map((t: number, i: number) => ({
       date: new Date(t * 1000).toISOString().split('T')[0],
       open: q?.open?.[i], high: q?.high?.[i] || q?.open?.[i],
-      low: q?.low?.[i] || q?.open?.[i],
-      close: q?.close?.[i], volume: q?.volume?.[i], symbol,
+      low: q?.low?.[i] || q?.open?.[i], close: q?.close?.[i],
+      volume: q?.volume?.[i], symbol,
     })).filter((d: Bar) => d.open && d.close && d.volume);
   } catch { return []; }
 }
@@ -38,6 +38,14 @@ async function fetchHistory(symbol: string, startDate: string, endDate: string):
 function sma(data: number[], period: number): number {
   if (data.length < period) return data[data.length - 1] || 0;
   return data.slice(-period).reduce((s: number, v: number) => s + v, 0) / period;
+}
+
+function ema(data: number[], period: number): number {
+  if (data.length < period) return data[data.length - 1] || 0;
+  const k = 2 / (period + 1);
+  let e = data.slice(0, period).reduce((s, v) => s + v, 0) / period;
+  for (let i = period; i < data.length; i++) e = data[i] * k + e * (1 - k);
+  return e;
 }
 
 function rsi(closes: number[], period: number = 14): number {
@@ -60,18 +68,25 @@ function atr(bars: Bar[], period: number = 14): number {
   return sum / period;
 }
 
-// === LONG-ONLY BACKTEST ENGINE ===
+function bbWidth(closes: number[], period: number = 20): number {
+  if (closes.length < period) return 999;
+  const slice = closes.slice(-period);
+  const mean = slice.reduce((s: number, v: number) => s + v, 0) / period;
+  const std = Math.sqrt(slice.reduce((s: number, v: number) => s + (v - mean) ** 2, 0) / period);
+  return mean > 0 ? (std * 4) / mean : 999;
+}
+
 function runBacktest(allBars: Map<string, Bar[]>, strategy: string, entryDelaySec: number, hypeWeight: number) {
   const trades: any[] = [];
   const returns: number[] = [];
   let hypeTriggered = 0;
   let equity = 10000;
   const equityCurve = [10000];
-
   const symbolList = Array.from(allBars.keys());
+
   for (const symbol of symbolList) {
     const bars = allBars.get(symbol);
-    if (!bars || bars.length < 25) continue;
+    if (!bars || bars.length < 30) continue;
     const hype = (HYPE_PROFILES[symbol] || 30) / 100;
     const closes = bars.map((b: Bar) => b.close);
     let inPosition = false;
@@ -79,29 +94,34 @@ function runBacktest(allBars: Map<string, Bar[]>, strategy: string, entryDelaySe
     let stopLoss = 0;
     let target = 0;
     let entryDay = 0;
-    let posSize = 0.05;
+    let posSize = 0.04;
 
-    for (let i = 20; i < bars.length; i++) {
+    for (let i = 25; i < bars.length; i++) {
       const c = bars[i];
       const historicalCloses = closes.slice(0, i + 1);
       const historicalBars = bars.slice(0, i + 1);
       const curRSI = rsi(historicalCloses, 14);
       const curATR = atr(historicalBars, 14);
+      const sma5 = sma(historicalCloses, 5);
       const sma10 = sma(historicalCloses, 10);
       const sma20val = sma(historicalCloses, 20);
+      const ema8 = ema(historicalCloses, 8);
+      const ema21 = ema(historicalCloses, 21);
+      const bb = bbWidth(historicalCloses, 20);
       const avgVol = bars.slice(Math.max(0, i - 20), i).reduce((s: number, b: Bar) => s + b.volume, 0) / 20;
       const relVol = c.volume / (avgVol || 1);
       const dayRet = (c.close - c.open) / c.open;
+      const prev3Ret = i >= 3 ? (closes[i] - closes[i - 3]) / closes[i - 3] : 0;
       const prev5Ret = i >= 5 ? (closes[i] - closes[i - 5]) / closes[i - 5] : 0;
+      const prev10Ret = i >= 10 ? (closes[i] - closes[i - 10]) / closes[i - 10] : 0;
 
-      // === EXIT LOGIC ===
+      // === EXIT LOGIC (tighter trailing stop, wider target) ===
       if (inPosition) {
         const holdDays = i - entryDay;
-        const trailStop = Math.max(stopLoss, c.close - 2.5 * curATR);
+        const trailStop = Math.max(stopLoss, c.close - 1.8 * curATR);
         const hitStop = c.low <= trailStop;
         const hitTarget = c.high >= target;
-        const timeExit = holdDays >= 5;
-
+        const timeExit = holdDays >= 7;
         if (hitStop || hitTarget || timeExit) {
           let exitP = hitTarget ? Math.min(target, c.high) : hitStop ? trailStop : c.close;
           const ret = (exitP - entryPrice) / entryPrice * posSize;
@@ -114,49 +134,68 @@ function runBacktest(allBars: Map<string, Bar[]>, strategy: string, entryDelaySe
         continue;
       }
 
-      // === ENTRY SIGNALS (LONG ONLY) ===
+      // === REGIME FILTER: skip if market is in freefall ===
+      const recentRets = closes.slice(Math.max(0, i - 10), i + 1);
+      const regimeDown = recentRets.length > 5 && (recentRets[recentRets.length - 1] - recentRets[0]) / recentRets[0] < -0.15;
+      if (regimeDown) continue;
+
+      // === ENTRY SIGNALS (LONG ONLY, STRICT) ===
       let factors = 0;
+      let signalStrength = 0;
 
       if (strategy === 'fade_lowquality_hype') {
-        // Buy oversold stocks that hype has abandoned (contrarian)
-        if (curRSI < 30) factors += 2;
-        else if (curRSI < 40) factors += 1;
-        if (c.close < sma20val * 0.95) factors += 1;
-        if (prev5Ret < -0.08) factors += 1;
-        if (relVol > 1.5 && dayRet > 0) factors += 1; // Volume returning on green day
-        if (hype < 0.4) factors += 1; // Low hype = less crowded
-        if (hype > 0.6 && curRSI < 35) factors += 1; // High hype oversold = bounce candidate
+        // Contrarian: buy deeply oversold, abandoned by hype crowd
+        if (curRSI < 25) { factors += 2; signalStrength += 2; }
+        else if (curRSI < 32 && curRSI > 20) { factors += 1; signalStrength += 1; }
+        if (c.close < sma20val * 0.92) factors += 2; // Deep discount to mean
+        else if (c.close < sma20val * 0.96) factors += 1;
+        if (prev5Ret < -0.12) factors += 1; // Sharp recent decline
+        if (prev3Ret < -0.08 && dayRet > 0.01) factors += 2; // Reversal candle after drop
+        if (relVol > 2.0 && dayRet > 0.01) factors += 1; // Volume surge on green
+        if (bb > 0.15) factors += 1; // High volatility = bigger moves
+        if (hype < 0.35) factors += 1; // Low hype = less crowded
+        if (hype > 0.6 && curRSI < 28) { factors += 2; hypeTriggered++; } // Hype stock deeply oversold
+        if (ema8 > ema21 && c.close > ema8) factors += 1; // Short-term trend turning up
         if (hype > 0.5) hypeTriggered++;
       } else if (strategy === 'hype_fade_aggressive') {
-        // Buy when high hype stocks are deeply oversold for snapback
-        if (hype > 0.5 && curRSI < 30) factors += 2;
-        if (hype > 0.6 && prev5Ret < -0.1) factors += 2;
-        if (relVol > 2 && dayRet < -0.03) factors += 1; // Capitulation
-        if (c.close < sma20val * 0.93) factors += 1;
+        if (hype > 0.5 && curRSI < 25) { factors += 3; signalStrength += 2; }
+        if (hype > 0.6 && prev5Ret < -0.15) factors += 2;
+        if (relVol > 2.5 && dayRet < -0.05) factors += 2; // Capitulation volume
+        if (c.close < sma20val * 0.90) factors += 2;
+        if (prev3Ret < -0.10 && dayRet > 0) factors += 2; // Reversal
+        if (bb > 0.18) factors += 1;
         hypeTriggered++;
       } else if (strategy === 'momentum_breakout') {
-        if (sma10 > sma20val) factors += 1;
-        if (c.close > sma20val && relVol > 1.8) factors += 2;
-        if (curRSI > 50 && curRSI < 70) factors += 1;
-        if (prev5Ret > 0.03 && prev5Ret < 0.12) factors += 1;
+        if (ema8 > ema21 && sma5 > sma10) factors += 2; // Trend aligned
+        if (c.close > sma20val && c.close > sma10 && relVol > 2.0) factors += 2; // Breakout
+        if (curRSI > 55 && curRSI < 72) factors += 1; // Strong but not overbought
+        if (prev5Ret > 0.04 && prev5Ret < 0.15) factors += 1;
+        if (dayRet > 0.02 && relVol > 1.8) factors += 1; // Strong day with volume
+        if (prev10Ret > 0 && prev5Ret > prev10Ret / 2) factors += 1; // Accelerating
       } else if (strategy === 'mean_reversion') {
-        if (curRSI < 25) factors += 2;
-        if (c.close < sma20val * 0.93) factors += 2;
-        if (relVol > 1.5 && dayRet < -0.04) factors += 1;
-        if (prev5Ret < -0.12) factors += 1;
+        if (curRSI < 22) { factors += 3; signalStrength += 2; }
+        else if (curRSI < 28) factors += 2;
+        if (c.close < sma20val * 0.90) factors += 2;
+        if (prev5Ret < -0.15) factors += 2;
+        if (relVol > 2 && dayRet > 0) factors += 2; // Reversal volume
+        if (bb > 0.15) factors += 1;
+        if (prev3Ret < -0.10 && dayRet > 0.01) factors += 2; // Hammer pattern
       } else if (strategy === 'volume_spike') {
-        if (relVol > 3) factors += 2;
-        if (relVol > 2 && dayRet > 0.02) factors += 1;
-        if (curRSI < 60) factors += 1;
-        if (sma10 > sma20val) factors += 1;
+        if (relVol > 3.5) factors += 2;
+        if (relVol > 2.5 && dayRet > 0.03) factors += 2; // Big volume + green
+        if (curRSI > 45 && curRSI < 65) factors += 1;
+        if (ema8 > ema21) factors += 1;
+        if (c.close > sma10 && c.close > c.open) factors += 1;
       }
 
-      if (factors >= 3 && curATR > 0) {
+      // === EXECUTE ENTRY: require 4+ factors (was 3) ===
+      const minFactors = strategy === 'hype_fade_aggressive' ? 5 : 4;
+      if (factors >= minFactors && curATR > 0) {
         const slip = entryDelaySec * 0.00003;
         entryPrice = c.close * (1 + slip);
-        stopLoss = entryPrice - 2 * curATR;
-        target = entryPrice + 3 * curATR; // 1.5:1 R:R
-        posSize = Math.max(0.02, Math.min(0.08, 0.05 * (factors / 3)));
+        stopLoss = entryPrice - 1.5 * curATR; // Tighter stop (was 2)
+        target = entryPrice + 3.5 * curATR; // Wider target for 2.3:1 R:R
+        posSize = Math.max(0.02, Math.min(0.06, 0.03 * (factors / minFactors) * (1 + signalStrength * 0.15)));
         entryDay = i;
         inPosition = true;
       }
@@ -164,22 +203,15 @@ function runBacktest(allBars: Map<string, Bar[]>, strategy: string, entryDelaySe
   }
 
   if (trades.length === 0) return null;
-
   const wins = trades.filter((t: any) => t.win).length;
   const losses = trades.length - wins;
   const winRate = wins / trades.length;
   const avgWin = trades.filter((t: any) => t.win).reduce((s: number, t: any) => s + ((t.exit - t.entry) / t.entry), 0) / (wins || 1);
   const avgLoss = Math.abs(trades.filter((t: any) => !t.win).reduce((s: number, t: any) => s + ((t.exit - t.entry) / t.entry), 0) / (losses || 1));
   const profitFactor = avgLoss > 0 ? (avgWin * wins) / (avgLoss * losses) : avgWin * wins > 0 ? 99 : 0;
-
   const totalReturn = equity / 10000 - 1;
   let maxDD = 0, peak = equityCurve[0];
-  for (const val of equityCurve) {
-    if (val > peak) peak = val;
-    const dd = (peak - val) / peak;
-    if (dd > maxDD) maxDD = dd;
-  }
-
+  for (const val of equityCurve) { if (val > peak) peak = val; const dd = (peak - val) / peak; if (dd > maxDD) maxDD = dd; }
   const meanR = returns.length > 0 ? returns.reduce((s: number, r: number) => s + r, 0) / returns.length : 0;
   const stdR = returns.length > 0 ? Math.sqrt(returns.reduce((s: number, r: number) => s + (r - meanR) ** 2, 0) / returns.length) : 1;
   const downside = Math.sqrt(returns.filter((r: number) => r < 0).reduce((s: number, r: number) => s + r ** 2, 0) / Math.max(returns.length, 1));
@@ -189,10 +221,8 @@ function runBacktest(allBars: Map<string, Bar[]>, strategy: string, entryDelaySe
   const hypeTrades = trades.filter((t: any) => t.hypeContributed).length;
 
   return {
-    sharpeRatio: +sharpe.toFixed(2),
-    sortinoRatio: +sortino.toFixed(2),
-    profitFactor: +profitFactor.toFixed(2),
-    maxDrawdown: +(-maxDD * 100).toFixed(1) + '%',
+    sharpeRatio: +sharpe.toFixed(2), sortinoRatio: +sortino.toFixed(2),
+    profitFactor: +profitFactor.toFixed(2), maxDrawdown: +(-maxDD * 100).toFixed(1) + '%',
     winRate: +(winRate * 100).toFixed(0) + '%',
     fillRatio: +(70 + Math.random() * 25).toFixed(0) + '%',
     avgEdgeDecay: Math.round(trades.reduce((s: number, t: any) => s + t.edgeDecay, 0) / trades.length) + 'ms',
@@ -212,7 +242,6 @@ export async function GET(req: NextRequest) {
   const startDate = searchParams.get('startDate') || '2025-01-01';
   const endDate = searchParams.get('endDate') || '2025-12-31';
   const hypeWeight = parseFloat(searchParams.get('hypeWeight') || '0.5');
-
   try {
     const allHistories = await Promise.all(SYMBOLS.map(s => fetchHistory(s, startDate, endDate)));
     const symbolBars = new Map<string, Bar[]>();
