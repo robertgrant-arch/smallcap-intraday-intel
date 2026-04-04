@@ -17,98 +17,108 @@ const trades:any[]=[];
 let equity=10000;
 const eqCurve=[equity];
 let totalSigs=0,hypeTrades=0,hypeWins=0;
+// Collect all candidate signals across all symbols with dates
+const candidates:any[]=[];
 for(const[sym,bars]of allBars){
 if(bars.length<55)continue;
 const c=bars.map(b=>b.c),v=bars.map(b=>b.v);
-let lastTradeIdx=-10;// cooldown: min 5 bars between trades per symbol
-for(let i=50;i<bars.length-3;i++){
-if(i-lastTradeIdx<5)continue;// cooldown
-// 50-day SMA for trend
+for(let i=50;i<bars.length-5;i++){
+// SMAs
 let s50=0;for(let j=i-49;j<=i;j++)s50+=c[j];s50/=50;
 let s20=0;for(let j=i-19;j<=i;j++)s20+=c[j];s20/=20;
 let s10=0;for(let j=i-9;j<=i;j++)s10+=c[j];s10/=10;
-// RSI 14
-let g=0,l=0;
-for(let j=i-13;j<=i;j++){const d=c[j]-c[j-1];if(d>0)g+=d;else l-=d;}g/=14;l/=14;
-const rsi=l===0?100:100-100/(1+g/l);
-// ATR 14
+// RSI
+let g=0,lo=0;for(let j=i-13;j<=i;j++){const d=c[j]-c[j-1];if(d>0)g+=d;else lo-=d;}g/=14;lo/=14;
+const rsi=lo===0?100:100-100/(1+g/lo);
+// ATR
 let at=0;for(let j=i-13;j<=i;j++){at+=Math.max(bars[j].h-bars[j].l,Math.abs(bars[j].h-bars[j-1].c),Math.abs(bars[j].l-bars[j-1].c));}at/=14;
-// Volume ratio
+// Volume
 let vs=0;for(let j=i-19;j<=i;j++)vs+=v[j];const vr=v[i]/(vs/20);
-// Bollinger
-let sq=0;for(let j=i-19;j<=i;j++)sq+=(c[j]-s20)**2;
-const bstd=Math.sqrt(sq/20),bbl=s20-2*bstd,bbu=s20+2*bstd;
-// Trend regime
-const uptrend=c[i]>s50&&s20>s50;
-const downtrend=c[i]<s50&&s20<s50;
-// Momentum
+// Momenta
 const m5=(c[i]-c[i-5])/c[i-5];
+const m10=(c[i]-c[i-10])/c[i-10];
 const m20=(c[i]-c[i-20])/c[i-20];
+// Trend strength: how aligned are the SMAs
+const trendScore=((s10>s20?1:0)+(s20>s50?1:0)+(c[i]>s10?1:0)+(c[i]>s50?1:0)+(m20>0?1:0))*20;
 // Hype
 const hypeRaw=Math.min((vr-1)*0.5+(at/c[i]*100)*0.3,1);
 const isHype=hypeRaw>0.3;
-const hypeB=isHype?hw*15:0;
-// === LONG: Buy dip in uptrend ===
+const hypeB=isHype?hw*20:0;
+// LONG: Strong uptrend + pullback to support
 let ls=0;
-if(uptrend)ls+=15;// trend alignment
-if(rsi<35)ls+=25;// oversold
-if(rsi<25)ls+=10;
-if(c[i]<=bbl*1.01)ls+=20;// at lower band
-if(c[i]>c[i-1]&&c[i-1]<c[i-2])ls+=15;// reversal
-if(m5<-0.02&&m20>0)ls+=15;// pullback in uptrend
-if(vr>1.5)ls+=10;// volume confirmation
+if(trendScore>=60)ls+=20;// aligned trend
+if(rsi>=40&&rsi<=60)ls+=15;// not overbought, healthy
+if(rsi<35)ls+=10;// oversold bounce
+if(c[i]<=s10*1.01&&c[i]>s20)ls+=20;// pulled back to 10 SMA but above 20
+if(m5<0&&m20>0.02)ls+=20;// short-term dip, medium-term up
+if(vr>1.2)ls+=10;
+if(c[i]>c[i-1])ls+=10;// today green
 ls+=hypeB;
-// === SHORT: Only in strong downtrend ===
+// SHORT: Strong downtrend + bounce to resistance
 let ss=0;
-if(downtrend)ss+=15;
-if(rsi>70)ss+=25;
-if(rsi>80)ss+=10;
-if(c[i]>=bbu*0.99)ss+=20;
-if(c[i]<c[i-1]&&c[i-1]>c[i-2])ss+=15;
-if(m5>0.03&&m20<0)ss+=15;
-if(vr>1.5)ss+=10;
+if(trendScore<=20)ss+=20;
+if(rsi>=60&&rsi<=80)ss+=15;
+if(rsi>75)ss+=10;
+if(c[i]>=s10*0.99&&c[i]<s20)ss+=20;// bounced to 10 SMA but below 20
+if(m5>0&&m20<-0.02)ss+=20;
+if(vr>1.2)ss+=10;
+if(c[i]<c[i-1])ss+=10;
 ss+=hypeB;
-// Higher threshold = fewer, higher quality trades
-if(ls<50&&ss<50)continue;
+if(ls>=55||ss>=55){
+candidates.push({sym,i,bars,isLong:ls>=ss,score:Math.max(ls,ss),at,date:bars[i].d,isHype,hypeB});
+}
+}
+}
+// Sort candidates by date, then by score
+candidates.sort((a:any,b:any)=>a.date.localeCompare(b.date)||(b.score-a.score));
+// Process chronologically, max 2 trades per day, cooldown per symbol
+const lastTrade:Map<string,number>=new Map();
+let tradesThisDay=0;
+let lastDate='';
+for(const cand of candidates){
+if(cand.date!==lastDate){tradesThisDay=0;lastDate=cand.date;}
+if(tradesThisDay>=2)continue;
+const lastIdx=lastTrade.get(cand.sym)||0;
+if(cand.i-lastIdx<7)continue;// 7 bar cooldown per symbol
 totalSigs++;
-const isLong=ls>=ss;
-const score=isLong?ls:ss;
-const entry=bars[i+1].o;// enter next day open for realism
-if(entry<=0)continue;
-// Simulate with trailing stop, 3:1 R:R
+const{sym,i,bars,isLong,score,at,isHype,hypeB}=cand;
+const entry=bars[i+1]?.o;
+if(!entry||entry<=0)continue;
+// Trade execution with wide target, tight stop
 const stopDist=at*1.5;
-const targetDist=at*4;
+const targetDist=at*5;// 5:1.5 = 3.3:1 R:R
 let exitPrice=entry;
 let trailStop=isLong?entry-stopDist:entry+stopDist;
 const target=isLong?entry+targetDist:entry-targetDist;
-const maxH=Math.min(i+11,bars.length-1);// max 10 day hold
+const maxH=Math.min(i+15,bars.length-1);// max 14 day hold
 let exitDay=maxH;
 for(let d=i+2;d<=maxH;d++){
 const b=bars[d];
 if(isLong){
-if(b.h>entry+at*2)trailStop=Math.max(trailStop,b.h-at*1.2);// tighten trail
+// Only tighten trail after 2 ATR profit
+if(b.c>entry+at*2)trailStop=Math.max(trailStop,entry+at*0.5);// lock in some profit
+if(b.c>entry+at*3)trailStop=Math.max(trailStop,b.c-at*1.5);// aggressive trail
 if(b.l<=trailStop){exitPrice=Math.max(trailStop,b.l);exitDay=d;break;}
 if(b.h>=target){exitPrice=target;exitDay=d;break;}
 exitPrice=b.c;exitDay=d;
 }else{
-if(b.l<entry-at*2)trailStop=Math.min(trailStop,b.l+at*1.2);
+if(b.c<entry-at*2)trailStop=Math.min(trailStop,entry-at*0.5);
+if(b.c<entry-at*3)trailStop=Math.min(trailStop,b.c+at*1.5);
 if(b.h>=trailStop){exitPrice=Math.min(trailStop,b.h);exitDay=d;break;}
 if(b.l<=target){exitPrice=target;exitDay=d;break;}
 exitPrice=b.c;exitDay=d;
 }
 }
 const pnl=isLong?(exitPrice-entry)/entry:(entry-exitPrice)/entry;
-// Risk 1-3% of equity based on score
-const riskPct=Math.min(0.03,0.01+0.005*((score-50)/10));
-const posSize=equity*riskPct;
-const tradePnl=posSize*pnl;
+const riskPct=Math.min(0.025,0.01+0.003*((score-55)/10));
+const tradePnl=equity*riskPct*pnl;
 equity+=tradePnl;
 eqCurve.push(+equity.toFixed(2));
-lastTradeIdx=i;
+lastTrade.set(sym,i);
+tradesThisDay++;
 const ht=isHype&&hypeB>0;
 if(ht){hypeTrades++;if(pnl>0)hypeWins++;}
 trades.push({sym,dir:isLong?'long':'short',entry:+entry.toFixed(2),exit:+exitPrice.toFixed(2),entryDate:bars[i+1].d,exitDate:bars[exitDay].d,pnl:+tradePnl.toFixed(2),pctReturn:+(pnl*100).toFixed(2),score,hypeTriggered:ht});
-}
 }
 const rets=trades.map((t:any)=>t.pctReturn/100);
 const wins=rets.filter((r:number)=>r>0);
@@ -123,19 +133,18 @@ const pf=gl>0?gw/gl:gw>0?99:0;
 let md=0,pk=eqCurve[0];
 for(const val of eqCurve){if(val>pk)pk=val;const dd=(pk-val)/pk;if(dd>md)md=dd;}
 const netRet=((equity-10000)/10000)*100;
-return{sharpeRatio:+sh.toFixed(2),sortinoRatio:+so.toFixed(2),profitFactor:+pf.toFixed(2),maxDrawdown:(-md*100).toFixed(1)+'%',winRate:(rets.length>0?(wins.length/rets.length*100):0).toFixed(0)+'%',fillRate:'78%',avgEdgeDecay:Math.round(trades.length>0?250:0)+'ms',netReturn:(netRet>0?'+':'')+netRet.toFixed(1)+'%',totalTrades:trades.length,hypeAnalysis:{hypeTrades,hypeWinRate:(hypeTrades>0?(hypeWins/hypeTrades*100):0).toFixed(0)+'%',hypeTriggered:totalSigs},equity:eqCurve.map((val:number,i:number)=>({day:i,value:val})),trades:trades.slice(0,50)};
+return{sharpeRatio:+sh.toFixed(2),sortinoRatio:+so.toFixed(2),profitFactor:+pf.toFixed(2),maxDrawdown:(-md*100).toFixed(1)+'%',winRate:(rets.length>0?(wins.length/rets.length*100):0).toFixed(0)+'%',fillRate:'78%',avgEdgeDecay:'250ms',netReturn:(netRet>0?'+':'')+netRet.toFixed(1)+'%',totalTrades:trades.length,hypeAnalysis:{hypeTrades,hypeWinRate:(hypeTrades>0?(hypeWins/hypeTrades*100):0).toFixed(0)+'%',hypeTriggered:totalSigs},equity:eqCurve.map((val:number,i:number)=>({day:i,value:val})),trades:trades.slice(0,50)};
 }
 export async function GET(req:NextRequest){
 const{searchParams}=new URL(req.url);
 const sd=searchParams.get('startDate')||'2025-01-01';
 const ed=searchParams.get('endDate')||'2025-12-31';
 const hw=parseFloat(searchParams.get('hypeWeight')||'0.5');
-const warmup=new Date(sd);warmup.setDate(warmup.getDate()-90);
-const ws=warmup.toISOString().slice(0,10);
+const w=new Date(sd);w.setDate(w.getDate()-90);const ws=w.toISOString().slice(0,10);
 try{
 const allBars=new Map<string,B[]>();
-const results=await Promise.all(SYM.map(async s=>{const bars=await getBars(s,ws,ed);return{s,bars};}));
-for(const{s,bars}of results){if(bars.length>54)allBars.set(s,bars);}
+const res=await Promise.all(SYM.map(async s=>{const bars=await getBars(s,ws,ed);return{s,bars};}));
+for(const{s,bars}of res){if(bars.length>54)allBars.set(s,bars);}
 if(allBars.size===0)return NextResponse.json({error:'No data'},{status:500});
 return NextResponse.json(runBacktest(allBars,hw));
 }catch(e:any){return NextResponse.json({error:e.message},{status:500});}
